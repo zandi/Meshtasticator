@@ -188,15 +188,15 @@ def run_simulations(conf: Config):
     (het, het_mute, hom) = generate_networks(conf)
 
     # examine networks
-    logger.debug("heterogenous network:")
+    logger.debug(f"heterogenous network: {conf.NR_NODES} nodes")
     for n in het:
         logger.debug(f"\t\t{n}")
 
-    logger.debug("heterogenous network w/ CLIENT_MUTE:")
+    logger.debug(f"heterogenous network w/ CLIENT_MUTE: {conf.NR_NODES} nodes")
     for n in het_mute:
         logger.debug(f"\t\t{n}")
 
-    logger.debug("baseline homogenous network:")
+    logger.debug(f"baseline homogenous network: {conf.NR_NODES} nodes")
     for n in hom:
         logger.debug(f"\t\t{n}")
 
@@ -204,15 +204,15 @@ def run_simulations(conf: Config):
     # we only tweaked node-specific values for infra nodes.
     # Will print to stdout, but oh well.
     random.seed(conf.SEED)
-    print("\n\n\nheterogenous network")
+    print(f"\nheterogenous network: {conf.NR_NODES} nodes")
     het_result = run_simulation(conf, het)
 
     random.seed(conf.SEED)
-    print("\n\n\nheterogenous network with non-infra nodes CLIENT_MUTE")
+    print(f"\nheterogenous network with non-infra nodes CLIENT_MUTE: {conf.NR_NODES} nodes")
     het_mute_result = run_simulation(conf, het_mute)
 
     random.seed(conf.SEED)
-    print("\n\n\nbaseline homogenous network")
+    print(f"\nbaseline homogenous network: {conf.NR_NODES} nodes")
     hom_result = run_simulation(conf, hom)
 
     return (het_result, het_mute_result, hom_result)
@@ -224,7 +224,7 @@ def main():
     parser.add_argument('nr_nodes', nargs='+', type=int, help='Number of nodes in generated situations. Start small to get a feel for runtimes. If provided a list, comparable simulations will be run for each choice of nr_nodes.')
     parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
     parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
-    parser.add_argument('-b', '--batch', type=int, help='run each nr_node sim on b different networks of nr_nodes')
+    parser.add_argument('-b', '--batch', type=int, default=1, help='run each nr_node sim on b different networks of nr_nodes')
     args = parser.parse_args()
 
     if args.verbose:
@@ -245,13 +245,28 @@ def main():
         conf.GUI_ENABLED = False
         conf.PLOT = False
 
+    results = {}
     for nr_nodes in args.nr_nodes:
         conf.NR_NODES = nr_nodes
 
-        (het_res, het_mute_res, hom_res) = run_simulations(conf)
+        batch_het_res = []
+        batch_het_mute_res = []
+        batch_hom_res = []
+        for i in range(args.batch):
+            print(f"\n\nbatch run: {i+1}/{args.batch}")
+            conf.SEED = conf.SEED + i # change network & behavior for batch runs
+            (het_res, het_mute_res, hom_res) = run_simulations(conf)
+            batch_het_res.append(het_res)
+            batch_het_mute_res.append(het_mute_res)
+            batch_hom_res.append(hom_res)
 
+        results[nr_nodes] = {}
+        results[nr_nodes]['het'] = batch_het_res
+        results[nr_nodes]['het_mute'] = batch_het_mute_res
+        results[nr_nodes]['hom'] = batch_hom_res
 
-    # collect & compare/display results
+    # TODO: compare & display results
+    pass
 
 if __name__ == '__main__':
     main()

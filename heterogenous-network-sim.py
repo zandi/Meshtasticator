@@ -12,6 +12,8 @@ from lib.config import Config
 from lib.node import NodeConfig, MESHTASTIC_ROLE
 from lib.point import Point
 
+from loraMesh import run_simulation
+
 '''We want to simulate heterogenous networks to investigate recommendations for
 managing them.
 
@@ -105,7 +107,8 @@ def generate_networks(conf: Config):
         z = conf.HM
         pos = Point(x, y, z)
 
-        nodeconf = NodeConfig(i, pos, conf.PERIOD, conf.PTX, conf.FREQ, antenna_gain=conf.GL)
+        # standard portable nodes are capable of moving
+        nodeconf = NodeConfig(i, pos, conf.PERIOD, conf.PTX, conf.FREQ, antenna_gain=conf.GL, can_move=True)
 
         personal_configs.append(nodeconf)
 
@@ -116,7 +119,8 @@ def generate_networks(conf: Config):
 
     # second network: heterogenous, personal are CLIENT_MUTE
     second_net = []
-    second_net.extend(copy.copy(infra_configs))
+    second_infra_configs = copy.deepcopy(infra_configs)
+    second_net.extend(second_infra_configs)
     second_personal_configs = copy.deepcopy(personal_configs)
     for cfg in second_personal_configs:
         cfg.role = MESHTASTIC_ROLE.CLIENT_MUTE
@@ -131,7 +135,8 @@ def generate_networks(conf: Config):
         cfg.antenna_gain = conf.GL
         cfg.period = conf.PERIOD
     third_net.extend(third_infra_configs)
-    third_net.extend(personal_configs)
+    third_personal_configs = copy.deepcopy(personal_configs)
+    third_net.extend(third_personal_configs)
     # TODO: check network is still connected
 
     return (first_net, second_net, third_net)
@@ -169,7 +174,15 @@ def main():
     for n in hom:
         logger.debug(f"\t\t{n}")
 
-    # run simulations
+    # run simulations. Can use same config since global params are indentical,
+    # we only tweaked node-specific values for infra nodes.
+    # Will print to stdout, but oh well.
+    random.seed(conf.SEED)
+    het_results = run_simulation(conf, het)
+    random.seed(conf.SEED)
+    het_mute_results = run_simulation(conf, het_mute)
+    random.seed(conf.SEED)
+    hom_results = run_simulation(conf, hom)
 
     # collect & compare/display results
 

@@ -59,7 +59,7 @@ class MeshNodeStats:
 class NodeConfig:
     """Specific configuration for a node
     """
-    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False):
+    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False, can_move: bool = False):
         """Initial configuration of a node
 
         Arguments:
@@ -72,6 +72,7 @@ class NodeConfig:
         antenna_gain -- antenna gain in dBi. Default 0
         hop_limit -- hop limit. Default 3
         neighbor_info -- if neighbor info is enabled. Default False
+        can_move -- True if node is able to move. Default False
         """
         self.node_id = node_id
         self.position = position.copy() # make sure we keep our own point
@@ -82,6 +83,7 @@ class NodeConfig:
         self.antenna_gain = antenna_gain
         self.hop_limit = hop_limit
         self.neighbor_info = neighbor_info
+        self.can_move = can_move
 
     @classmethod
     def from_gen_scenario_output(cls, node_id: int, node_dict: {}, period: int, tx_power: int, freq: float):
@@ -223,7 +225,10 @@ class MeshNode:
         self.transmitter = simpy.Resource(self.env, 1)
 
         # start mobility if enabled
-        if self.conf.MOVEMENT_ENABLED and self.moveRng.random() <= self.conf.APPROX_RATIO_NODES_MOVING:
+        if self.conf.MOVEMENT_ENABLED and \
+            self.node_conf.can_move and \
+            self.moveRng.random() <= self.conf.APPROX_RATIO_NODES_MOVING:
+
             self.isMoving = True
             if self.moveRng.random() <= self.conf.APPROX_RATIO_OF_NODES_MOVING_W_GPS_ENABLED:
                 self.gpsEnabled = True

@@ -141,6 +141,10 @@ class NodeConfig:
 
         return (rssi, pl)
 
+    def __str__(self):
+        as_string = f"NodeConfig id: {self.node_id} at {self.position}, role {self.role}. power {self.tx_power} dBm, gain {self.antenna_gain} dBi, on {self.freq/1000000} MHz. hop limit {self.hop_limit}"
+        return as_string
+
 class MeshNode:
     """Class containing all the particular state of a MeshNode, references to necessary
     external resources like the simpy env, and process functions for simulation

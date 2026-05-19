@@ -12,7 +12,7 @@ from lib.discrete_event_sim_components import SimulationState, SimulationDataTra
 from lib.mac import set_transmit_delay, get_retransmission_msec
 from lib.phy import check_collision, is_channel_active, airtime
 from lib.packet import NODENUM_BROADCAST, MeshPacket, MeshMessage
-from lib.phy import estimate_path_loss
+from lib.phy import estimate_path_loss, rootFinder
 from lib.point import Point
 
 logger = logging.getLogger(__name__)
@@ -254,6 +254,29 @@ class MeshNode:
     @property
     def is_client_mute(self):
         return self.role == MESHTASTIC_ROLE.CLIENT_MUTE
+
+    def estimate_max_range(self):
+        '''improved version of the function in lib/phy.py. Use the node's config
+        that we inherently are attached to, as well as scenario-sepecific config.
+
+        Unfortunately because the range depends on the height and gain of the
+        receiving node, we actually can't get a single number that is accurate
+        for all situations. Just assume the receiving node is the minimum expected
+        capability so we don't overestimate range.
+        '''
+        def zero_link_budget(dist: float):
+            '''defined to give rssi-above-sensitivity, so that the zero aligns
+            with a reasonable estimate of a max range (variable is distance)
+            '''
+            # assume we're communicating with a somewhat crummy default node,
+            # height agl is 1m, antenna gain is 0 dBi
+            pl = estimate_path_loss(self.conf, dist, self.node_conf.freq, self.position.z, 1.0)
+            rssi = self.node_conf.tx_power + self.node_conf.antenna_gain + 0 - pl
+            return rssi - self.conf.current_preset['sensitivity']
+
+        maxrange = rootFinder(zero_link_budget, 1500)
+        logger.debug(f"node {self.nodeid} max range estimate: {maxrange} m")
+        return maxrange
 
     def track_channel_utilization(self):
         """

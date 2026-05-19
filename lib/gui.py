@@ -214,7 +214,7 @@ class Graph:
         # Plot the coverage circle
         circle = plt.Circle(
             (node.position.x, node.position.y),
-            radius=phy.estimate_max_range(node.antennaGain),
+            radius=node.estimate_max_range(),
             color=plt.cm.Set1(node.nodeid),
             alpha=0.1
         )

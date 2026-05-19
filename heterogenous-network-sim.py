@@ -2,7 +2,9 @@
 import argparse
 import copy
 import logging
+import random
 
+logging.basicConfig()
 logger = logging.getLogger(__name__)
 
 from lib.common import find_random_position
@@ -76,18 +78,34 @@ def generate_networks(conf: Config):
         pos = Point(x, y, z)
 
         # keep role as default CLIENT
-        nodeconf = NodeConfig(i, pos, infra_only_conf.PERIOD, antenna_gain=infra_only_conf.GL)
+        nodeconf = NodeConfig(i, pos, infra_only_conf.PERIOD, infra_only_conf.PTX, infra_only_conf.FREQ, antenna_gain=infra_only_conf.GL)
 
         infra_configs.append(nodeconf)
 
+    # curious about pairwise distances between infra nodes
+    distances={}
+    logger.debug(f"distances in m between pairwise infrastructure nodes:")
+    for n in infra_configs:
+        for m in infra_configs:
+            if n.node_id == m.node_id:
+                continue
+            if distances.__contains__((n.node_id, m.node_id)):
+                # already computed, skip
+                pass
+            else:
+                dist = n.position.euclidean_distance(m.position)
+                logger.debug(f"{n.node_id=} <--> {m.node_id=}: {dist}")
+                distances[(n.node_id, m.node_id)] = dist
+                distances[(m.node_id, n.node_id)] = dist
+
 
     personal_configs = []
-    for i in range(num_personal_nodes):
+    for i in range(num_infra_nodes, conf.NR_NODES):
         x, y = find_random_position(conf, infra_configs)
         z = conf.HM
         pos = Point(x, y, z)
 
-        nodeconf = NodeConfig(i, pos, conf.PERIOD, antenna_gain=conf.GL)
+        nodeconf = NodeConfig(i, pos, conf.PERIOD, conf.PTX, conf.FREQ, antenna_gain=conf.GL)
 
         personal_configs.append(nodeconf)
 
@@ -99,14 +117,14 @@ def generate_networks(conf: Config):
     # second network: heterogenous, personal are CLIENT_MUTE
     second_net = []
     second_net.extend(copy.copy(infra_configs))
-    second_personal_configs = copy.copy(personal_configs)
+    second_personal_configs = copy.deepcopy(personal_configs)
     for cfg in second_personal_configs:
         cfg.role = MESHTASTIC_ROLE.CLIENT_MUTE
     second_net.extend(second_personal_configs)
 
     # third network: 1st network, but all infra nodes converted to personal
     third_net = []
-    third_infra_configs = copy.copy(infra_configs)
+    third_infra_configs = copy.deepcopy(infra_configs)
     for cfg in third_infra_configs:
         # height, gain, period
         cfg.position.z = conf.HM
@@ -123,13 +141,33 @@ def main():
         description='simulate and compare different configurations of heterogenous networks'
         )
     parser.add_argument('nr_nodes', type=int, help='Number of nodes in generated situations. Start small to get a feel for runtimes.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
     args = parser.parse_args()
 
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("debug logging enabled")
+
+    # set up common config
     conf = Config()
+    random.seed(conf.SEED) # deterministic sims
     conf.NR_NODES = args.nr_nodes
 
     # set up networks to simulate
     (het, het_mute, hom) = generate_networks(conf)
+
+    # examine networks
+    logger.debug("heterogenous network:")
+    for n in het:
+        logger.debug(f"\t\t{n}")
+
+    logger.debug("heterogenous network w/ CLIENT_MUTE:")
+    for n in het_mute:
+        logger.debug(f"\t\t{n}")
+
+    logger.debug("baseline homogenous network:")
+    for n in hom:
+        logger.debug(f"\t\t{n}")
 
     # run simulations
 

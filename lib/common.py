@@ -13,7 +13,7 @@ def find_random_position(conf, node_configs) -> (float, float):
     not within the minimum distance of any existing node.
 
     Arguments:
-    conf -- Config object defining simulation
+    conf -- Config object defining simulation. It's assumed our node inherites values like gain, power and height from this.
     node_configs -- list of NodeConfig objects, or node objects, defining pre-existing nodes
 
     Returns:
@@ -35,8 +35,8 @@ def find_random_position(conf, node_configs) -> (float, float):
                 if dist < conf.MINDIST:
                     foundMin = False
                     break
-                pathLoss = phy.estimate_path_loss(conf, dist, conf.FREQ)
-                rssi = conf.PTX + 2*conf.GL - pathLoss
+                pathLoss = phy.estimate_path_loss(conf, dist, conf.FREQ, pos_candidate.z, n.position.z)
+                rssi = conf.PTX + conf.GL + n.antenna_gain - pathLoss
                 # At least one node should be able to reach it
                 if rssi >= conf.current_preset["sensitivity"]:
                     foundMax = True

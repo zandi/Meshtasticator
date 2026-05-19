@@ -59,7 +59,7 @@ class MeshNodeStats:
 class NodeConfig:
     """Specific configuration for a node
     """
-    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False, can_move: bool = False):
+    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False, can_move: bool = True):
         """Initial configuration of a node
 
         Arguments:

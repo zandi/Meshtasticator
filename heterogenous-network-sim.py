@@ -47,7 +47,9 @@ def upgrade_node_in_place(n: NodeConfig, infra_config: Config) -> None:
 def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
     '''given a list of node configs, create two comparable heterogenous
     networks. One simple has some nodes upgraded to infrastructure nodes.
-    The other also has non-infrastructure nodes set to CLIENT_MUTE
+    The other also has non-infrastructure nodes set to CLIENT_MUTE. Once
+    infrastructure nodes are chosen, non-infra nodes in all networks have
+    'can_move' set to True to allow movement.
 
     Arguments:
     nodes -- list of NodeConfig objects.
@@ -116,6 +118,13 @@ def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
         if i not in infra_node_indices:
             het_nodes_mute[i].role = MESHTASTIC_ROLE.CLIENT_MUTE
 
+    # hack: re-enable movement possibility for all non-infrastructure nodes
+    for i in range(len(nodes)):
+        if i not in infra_node_indices:
+            nodes[i].can_move = True # modifies argument by reference
+            het_nodes[i].can_move = True
+            het_nodes_mute[i].can_move = True
+
     return (het_nodes, het_nodes_mute)
 
 def generate_networks(conf: Config):
@@ -144,38 +153,36 @@ def generate_networks(conf: Config):
     infra_only_conf.HM = 10.0 # installed higher up
     infra_only_conf.PERIOD = 1000 * infra_only_conf.SIMTIME # infra nodes only rebroadcast messages, are not active clients
 
-    hom_network = default_generate_node_list(conf)
-    het_network, het_network_mute = make_heterogenous_networks(hom_network, infra_only_conf)
+    adjustment = 0
+    ADJUSTMENT_LIMIT = 10
+    while adjustment < ADJUSTMENT_LIMIT:
+        random.seed(conf.SEED + adjustment)
+        hom_network = default_generate_node_list(conf)
+        # hack: set all nodes to immobile, then retroactively choose non-infra nodes
+        # to make mobile
+        for n in hom_network:
+            n.can_move = False
 
-    return (het_network, het_network_mute, hom_network)
+        try:
+            het_network, het_network_mute = make_heterogenous_networks(hom_network, infra_only_conf)
+            return (het_network, het_network_mute, hom_network)
+        except ValueError as e:
+            # generated homogenous network cannot be upgraded. generate a new one.
+            logger.debug(f"Unable to convert homogenous network to suitable heterogenous one. Generating a new homogenous network. Limit {ADJUSTMENT_LIMIT} times")
+            adjustment += 1
+            continue
+    raise ValueError(f"Unable to generate a suitable network using {conf.NR_NODES} nodes")
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='simulate and compare different configurations of heterogenous networks'
-        )
-    parser.add_argument('nr_nodes', type=int, help='Number of nodes in generated situations. Start small to get a feel for runtimes.')
-    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
-    parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
-    args = parser.parse_args()
 
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
-        lib_logger = logging.getLogger('lib')
-        lib_logger.setLevel(logging.DEBUG)
-        logger.debug("debug logging enabled")
+def run_simulations(conf: Config):
+    '''generate networks, run simulations on them, and return results
 
-    # set up common config
-    conf = Config()
-    random.seed(conf.SEED) # deterministic sims
-    conf.NR_NODES = args.nr_nodes
-    conf.MODEL = 0 # selection of model with less dramatic range between infra nodes
+    Arguments:
+    conf -- Config object describing network to generate
 
-    if args.gui:
-        conf.GUI_ENABLED = True
-        conf.PLOT = True # also plot sim message sequence
-    else:
-        conf.GUI_ENABLED = False
-        conf.PLOT = False
+    Returns:
+    (het_result, het_mute_result, hom_result) -- simulation results for each variety of network
+    '''
 
     # set up networks to simulate
     (het, het_mute, hom) = generate_networks(conf)
@@ -198,14 +205,51 @@ def main():
     # Will print to stdout, but oh well.
     random.seed(conf.SEED)
     print("\n\n\nheterogenous network")
-    het_results = run_simulation(conf, het)
+    het_result = run_simulation(conf, het)
+
     random.seed(conf.SEED)
     print("\n\n\nheterogenous network with non-infra nodes CLIENT_MUTE")
-    het_mute_results = run_simulation(conf, het_mute)
-    random.seed(conf.SEED)
+    het_mute_result = run_simulation(conf, het_mute)
 
+    random.seed(conf.SEED)
     print("\n\n\nbaseline homogenous network")
-    hom_results = run_simulation(conf, hom)
+    hom_result = run_simulation(conf, hom)
+
+    return (het_result, het_mute_result, hom_result)
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='simulate and compare different configurations of heterogenous networks'
+        )
+    parser.add_argument('nr_nodes', nargs='+', type=int, help='Number of nodes in generated situations. Start small to get a feel for runtimes. If provided a list, comparable simulations will be run for each choice of nr_nodes.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
+    parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
+    parser.add_argument('-b', '--batch', type=int, help='run each nr_node sim on b different networks of nr_nodes')
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        lib_logger = logging.getLogger('lib')
+        lib_logger.setLevel(logging.DEBUG)
+        logger.debug("debug logging enabled")
+
+    # set up common config
+    conf = Config()
+    random.seed(conf.SEED) # deterministic sims
+    conf.MODEL = 0 # selection of model with less dramatic range between infra nodes
+
+    if args.gui:
+        conf.GUI_ENABLED = True
+        conf.PLOT = True # also plot sim message sequence
+    else:
+        conf.GUI_ENABLED = False
+        conf.PLOT = False
+
+    for nr_nodes in args.nr_nodes:
+        conf.NR_NODES = nr_nodes
+
+        (het_res, het_mute_res, hom_res) = run_simulations(conf)
+
 
     # collect & compare/display results
 

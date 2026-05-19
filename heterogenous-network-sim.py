@@ -99,6 +99,11 @@ def generate_networks(conf: Config):
                 logger.debug(f"{n.node_id=} <--> {m.node_id=}: {dist}")
                 distances[(n.node_id, m.node_id)] = dist
                 distances[(m.node_id, n.node_id)] = dist
+                #compute rssi & reachability, just double-check
+                rssi, pl = n.compute_rssi_and_pathloss_to(m, infra_only_conf)
+                logger.debug(f"infra node {n.node_id} --> {m.node_id}: {rssi=}")
+                if rssi < infra_only_conf.current_preset['sensitivity']:
+                    logger.warn(f"infra nodes {n.node_id} and {m.node_id} cannot reach each other. {rssi=} below sensitivity")
 
 
     personal_configs = []
@@ -147,16 +152,26 @@ def main():
         )
     parser.add_argument('nr_nodes', type=int, help='Number of nodes in generated situations. Start small to get a feel for runtimes.')
     parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
+    parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
     args = parser.parse_args()
 
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+        lib_logger = logging.getLogger('lib')
+        lib_logger.setLevel(logging.DEBUG)
         logger.debug("debug logging enabled")
 
     # set up common config
     conf = Config()
     random.seed(conf.SEED) # deterministic sims
     conf.NR_NODES = args.nr_nodes
+
+    if args.gui:
+        conf.GUI_ENABLED = True
+        conf.PLOT = True # also plot sim message sequence
+    else:
+        conf.GUI_ENABLED = False
+        conf.PLOT = False
 
     # set up networks to simulate
     (het, het_mute, hom) = generate_networks(conf)

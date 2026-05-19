@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 from lib.common import find_random_position
 from lib.config import Config
-from lib.node import NodeConfig, MESHTASTIC_ROLE
+from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE
 from lib.point import Point
 
 from loraMesh import run_simulation
@@ -37,21 +37,93 @@ infrastructure nodes, but having less reach, leading to degraded network
 performance.
 '''
 
+def upgrade_node_in_place(n: NodeConfig, infra_config: Config) -> None:
+    '''apply the given infra config to the node
+    '''
+    n.position.z = infra_config.HM
+    n.antenna_gain = infra_config.GL
+    n.period = infra_config.PERIOD
+
+def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
+    '''given a list of node configs, create two comparable heterogenous
+    networks. One simple has some nodes upgraded to infrastructure nodes.
+    The other also has non-infrastructure nodes set to CLIENT_MUTE
+
+    Arguments:
+    nodes -- list of NodeConfig objects.
+    infra_config -- Config object for infrastructure nodes
+
+    Returns:
+    (het_nodes, het_nodes_mute) -- duplicate of `nodes` but with some nodes randomly upgraded to infrastructure nodes.
+    '''
+    # randomly pick some nodes to upgrade to infra nodes. They must be
+    # - immoblie
+    # - mutually reachable
+    # - not within our infra node MINDIST
+
+    RATIO_OF_INFRA_NODES = 0.2 # percentage of nodes in the network that should be infra nodes
+    num_infra_nodes = int(len(nodes) * RATIO_OF_INFRA_NODES)
+    if num_infra_nodes < 2:
+        raise ValueError(f"Must have enough nodes to have 2 infrastructure nodes. {len(nodes)} * {RATIO_OF_INFRA_NODES} < 2")
+
+    het_nodes = copy.deepcopy(nodes)
+
+    # randomly select nodes to upgrade
+    infra_node_indices = []
+    indices = [i for i in range(len(het_nodes))]
+    random.shuffle(indices)
+    for try_i in indices:
+        if len(infra_node_indices) >= num_infra_nodes:
+            # have enough, we're done!
+            break
+
+        candidate = het_nodes[try_i]
+        if not candidate.can_move:
+            if len(infra_node_indices) < 1:
+                # first choice is easiest
+                upgrade_node_in_place(candidate, infra_config)
+                infra_node_indices.append(try_i)
+            else:
+                # check against other infra nodes already chosen.
+                # make sure we're not too close to any other infra node,
+                # and can reach at least one
+                is_connected = False
+                too_close = False
+                for other_i in infra_node_indices:
+                    other_n = het_nodes[other_i]
+                    dist = candidate.position.euclidean_distance(other_n.position)
+                    if dist < infra_config.MINDIST:
+                        # immediately disqualified
+                        too_close = True
+                        break
+
+                    rssi = candidate.compute_rssi_and_pathloss_to(other_n, infra_config)[0]
+                    if not is_connected and rssi > infra_config.current_preset['sensitivity']:
+                        # just need to be connected to one
+                        is_connected = True
+                if is_connected and not too_close:
+                    # candidate wins!
+                    upgrade_node_in_place(candidate, infra_config)
+                    infra_node_indices.append(try_i)
+
+    # (should have) found and upgraded infrastructure nodes
+    if len(infra_node_indices) < num_infra_nodes:
+        raise ValueError(f"Unable to select {num_infra_nodes} suitable nodes from node list to upgade to infrastructure nodes")
+
+    # for the second heterogenous network, make all non-infra nodes CLIENT_MUTE
+    het_nodes_mute = copy.deepcopy(het_nodes)
+    for i in range(len(het_nodes_mute)):
+        if i not in infra_node_indices:
+            het_nodes_mute[i].role = MESHTASTIC_ROLE.CLIENT_MUTE
+
+    return (het_nodes, het_nodes_mute)
+
 def generate_networks(conf: Config):
     '''generate 3 roughly-comparable Meshtastic networks to simulate.
 
-    First generate a connected network of infrastructure nodes, then generate
-    personal nodes s.t. any personal node can reach at least one infrastructure node.
-    This set of nodes can create 2 networks to simulate: one with all nodes set
-    to CLIENT, and one where all personal nodes are CLIENT_MUTE. This simulates an
-    area with coverage by infrastructure nodes.
-
-    To create a comparable homogenous network from this, convert the infrastructure nodes
-    into personal nodes (reduced height, antenna gain) and check that our network is
-    still connected.
-
-    If not... throw it out and start over? go back to the drawing board
-    for how we generate these networks?
+    One is heterogenous with all nodes set to CLIENT. Another is heterogenous
+    with non-infrastructure nodes set to CLIENT_MUTE. The third is homogenous
+    and the 'baseline' network.
 
     Arguments:
     conf -- Config object describing network
@@ -59,7 +131,11 @@ def generate_networks(conf: Config):
     Returns:
     '''
 
-    RATIO_OF_INFRA_NODES = 0.2 # percentage of nodes in the network that should be infra nodes
+    # new algorithm: generate baseline homogenous network first.
+    # from this, randomly pick 2 nodes to be infrastructure nodes. They must
+    # be immobile and mutually reachable. Upgrade them to infrastructure.
+    # For the last network, copy this first heterogenous network, but make all
+    # non-infrastructure nodes CLIENT_MUTE
 
     # configuration differences just for infrastructure nodes
     infra_only_conf = copy.copy(conf)
@@ -68,83 +144,10 @@ def generate_networks(conf: Config):
     infra_only_conf.HM = 10.0 # installed higher up
     infra_only_conf.PERIOD = 1000 * infra_only_conf.SIMTIME # infra nodes only rebroadcast messages, are not active clients
 
-    num_infra_nodes = int(conf.NR_NODES * RATIO_OF_INFRA_NODES)
-    num_personal_nodes = conf.NR_NODES - num_infra_nodes
-    if num_infra_nodes < 2:
-        raise ValueError(f"Must have enough nodes to have 2 infrastructure nodes. {conf.NR_NODES=} * {RATIO_OF_INFRA_NODES} < 2")
+    hom_network = default_generate_node_list(conf)
+    het_network, het_network_mute = make_heterogenous_networks(hom_network, infra_only_conf)
 
-    infra_configs = []
-    for i in range(num_infra_nodes):
-        x, y = find_random_position(infra_only_conf, infra_configs)
-        z = infra_only_conf.HM
-        pos = Point(x, y, z)
-
-        # keep role as default CLIENT
-        nodeconf = NodeConfig(i, pos, infra_only_conf.PERIOD, infra_only_conf.PTX, infra_only_conf.FREQ, antenna_gain=infra_only_conf.GL)
-
-        infra_configs.append(nodeconf)
-
-    # curious about pairwise distances between infra nodes
-    distances={}
-    logger.debug(f"distances in m between pairwise infrastructure nodes:")
-    for n in infra_configs:
-        for m in infra_configs:
-            if n.node_id == m.node_id:
-                continue
-            if distances.__contains__((n.node_id, m.node_id)):
-                # already computed, skip
-                pass
-            else:
-                dist = n.position.euclidean_distance(m.position)
-                logger.debug(f"{n.node_id=} <--> {m.node_id=}: {dist}")
-                distances[(n.node_id, m.node_id)] = dist
-                distances[(m.node_id, n.node_id)] = dist
-                #compute rssi & reachability, just double-check
-                rssi, pl = n.compute_rssi_and_pathloss_to(m, infra_only_conf)
-                logger.debug(f"infra node {n.node_id} --> {m.node_id}: {rssi=}")
-                if rssi < infra_only_conf.current_preset['sensitivity']:
-                    logger.warn(f"infra nodes {n.node_id} and {m.node_id} cannot reach each other. {rssi=} below sensitivity")
-
-
-    personal_configs = []
-    for i in range(num_infra_nodes, conf.NR_NODES):
-        x, y = find_random_position(conf, infra_configs)
-        z = conf.HM
-        pos = Point(x, y, z)
-
-        # standard portable nodes are capable of moving
-        nodeconf = NodeConfig(i, pos, conf.PERIOD, conf.PTX, conf.FREQ, antenna_gain=conf.GL, can_move=True)
-
-        personal_configs.append(nodeconf)
-
-    # first network: heterogenous, all CLIENT
-    first_net = []
-    first_net.extend(infra_configs)
-    first_net.extend(personal_configs)
-
-    # second network: heterogenous, personal are CLIENT_MUTE
-    second_net = []
-    second_infra_configs = copy.deepcopy(infra_configs)
-    second_net.extend(second_infra_configs)
-    second_personal_configs = copy.deepcopy(personal_configs)
-    for cfg in second_personal_configs:
-        cfg.role = MESHTASTIC_ROLE.CLIENT_MUTE
-    second_net.extend(second_personal_configs)
-
-    # third network: 1st network, but all infra nodes converted to personal
-    third_net = []
-    third_infra_configs = copy.deepcopy(infra_configs)
-    for cfg in third_infra_configs:
-        # height, gain, period
-        cfg.position.z = conf.HM
-        cfg.antenna_gain = conf.GL
-        cfg.period = conf.PERIOD
-    third_net.extend(third_infra_configs)
-    third_personal_configs = copy.deepcopy(personal_configs)
-    third_net.extend(third_personal_configs)
-    # TODO: check network is still connected
-
-    return (first_net, second_net, third_net)
+    return (het_network, het_network_mute, hom_network)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -165,6 +168,7 @@ def main():
     conf = Config()
     random.seed(conf.SEED) # deterministic sims
     conf.NR_NODES = args.nr_nodes
+    conf.MODEL = 0 # selection of model with less dramatic range between infra nodes
 
     if args.gui:
         conf.GUI_ENABLED = True
@@ -193,10 +197,14 @@ def main():
     # we only tweaked node-specific values for infra nodes.
     # Will print to stdout, but oh well.
     random.seed(conf.SEED)
+    print("\n\n\nheterogenous network")
     het_results = run_simulation(conf, het)
     random.seed(conf.SEED)
+    print("\n\n\nheterogenous network with non-infra nodes CLIENT_MUTE")
     het_mute_results = run_simulation(conf, het_mute)
     random.seed(conf.SEED)
+
+    print("\n\n\nbaseline homogenous network")
     hom_results = run_simulation(conf, hom)
 
     # collect & compare/display results

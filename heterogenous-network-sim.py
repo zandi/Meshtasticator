@@ -250,6 +250,11 @@ def analyze_and_display_results(results_collection):
     metrics_of_interest = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
     as_percent = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
 
+    def make_percent(v):
+        '''turn float in [0,1] into a percent float [0,100] with 2 decimal places
+        '''
+        return round(v * 100, 2)
+
     batch_size = None
     for nr_nodes, batch in results_collection.items():
         if batch_size is None:
@@ -267,12 +272,12 @@ def analyze_and_display_results(results_collection):
     print("=== RESULTS ===")
     print("\n\t\t\tHomogenous (baseline)\tHeterogenous\tHeterogenous + CLIENT_MUTE")
     for nr_nodes, batch in analyzed_results.items():
-        print(f"{nr_nodes} Nodes:")
+        print(f"{nr_nodes} Nodes, batch of {batch_size} networks:")
         for m in metrics_of_interest:
             if m in as_percent:
-                hom_m_pr = round(batch['hom'][m] * 100, 2)
-                het_m_pr = round(batch['het'][m] * 100, 2)
-                het_mute_m_pr = round(batch['het_mute'][m] * 100, 2)
+                hom_m_pr = make_percent(batch['hom'][m])
+                het_m_pr = make_percent(batch['het'][m])
+                het_mute_m_pr = make_percent(batch['het_mute'][m])
                 print(f"{m:>20}:\t{hom_m_pr:>20}%\t{het_m_pr:>11}%\t{het_mute_m_pr:>25}%")
             elif m == 'meanDelay':
                 hom_m = round(batch['hom'][m], 2)
@@ -282,6 +287,9 @@ def analyze_and_display_results(results_collection):
             else:
                 print(f"{m:>20}:\t{batch['hom'][m]}\t\t{batch['het'][m]}\t\t{batch['het_mute'][m]}")
         print("\n")
+
+    # TODO: also print matplotlib graphs & figures for metrics of interest
+    pass
 
 def main():
     # set up common config, use default config for default arg values where appropriate

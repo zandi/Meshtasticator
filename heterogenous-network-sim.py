@@ -217,6 +217,72 @@ def run_simulations(conf: Config):
 
     return (het_result, het_mute_result, hom_result)
 
+def analyze_and_display_results(results_collection):
+    '''Given a collection of results from a number of batches of simulation runs,
+    compute statistics of interest from the raw results, and display these
+    statistics in a useful manner
+
+    Some metrics of interest to compare homogenous networks and somewhat
+    more realistic heterogenous networks:
+    - collision rate
+    - node reach
+    - 'usefulness' metric
+    - avg. airtime
+    - delay avg. (I want to double-check what this is actually measuring)
+
+    context variables useful for interpreting results:
+    - batch number
+    - messages generated
+    - number of moving nodes
+    - number of infrastructure nodes
+
+    primary variables we vary which we consider our results a "function-of":
+    - network configuration: homogenous, heterogenous, heterogenous+mute
+    - number of nodes
+
+    Arguments:
+    results_collection -- nested dictionary of results. Top-level key is
+    the nr_nodes of the batch. Below this are lists of results keyed by
+    the network type: 'het', 'het_mute' or 'hom'.
+    '''
+    # compute averages of metrics of interest from batches for each network size.
+    analyzed_results = {}
+    metrics_of_interest = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
+    as_percent = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
+
+    batch_size = None
+    for nr_nodes, batch in results_collection.items():
+        if batch_size is None:
+            batch_size = len(batch)
+        analyzed_results[nr_nodes] = {}
+        for network_variety, batch_results in batch.items():
+            analyzed_results[nr_nodes][network_variety] = {}
+            for m in metrics_of_interest:
+                avg = sum([r[m] for r in batch_results]) / len(batch_results)
+                analyzed_results[nr_nodes][network_variety][m] = avg
+
+    # display metrics of interest with relevant context info in title, and with
+    # primary variables as x-axis
+    # column of network varieties, rows of metrics, in groups of nr_nodes
+    print("=== RESULTS ===")
+    print("\n\t\t\tHomogenous (baseline)\tHeterogenous\tHeterogenous + CLIENT_MUTE")
+    for nr_nodes, batch in analyzed_results.items():
+        print(f"{nr_nodes} Nodes:")
+        for m in metrics_of_interest:
+            if m in as_percent:
+                hom_m_pr = round(batch['hom'][m] * 100, 2)
+                het_m_pr = round(batch['het'][m] * 100, 2)
+                het_mute_m_pr = round(batch['het_mute'][m] * 100, 2)
+                print(f"{m:>20}:\t{hom_m_pr:>20}%\t{het_m_pr:>11}%\t{het_mute_m_pr:>25}%")
+            elif m == 'meanDelay':
+                hom_m = round(batch['hom'][m], 2)
+                het_m = round(batch['het'][m], 2)
+                het_mute_m = round(batch['het_mute'][m], 2)
+                print(f"{m:>20}:\t{hom_m:>20} ms\t{het_m:>11} ms\t{het_mute_m:>25} ms")
+            else:
+                print(f"{m:>20}:\t{batch['hom'][m]}\t\t{batch['het'][m]}\t\t{batch['het_mute'][m]}")
+        print("\n")
+
 def main():
     # set up common config, use default config for default arg values where appropriate
     conf = Config()
@@ -269,8 +335,8 @@ def main():
         results[nr_nodes]['het_mute'] = batch_het_mute_res
         results[nr_nodes]['hom'] = batch_hom_res
 
-    # TODO: compare & display results
-    pass
+    # compare & display results
+    analyze_and_display_results(results)
 
 if __name__ == '__main__':
     main()

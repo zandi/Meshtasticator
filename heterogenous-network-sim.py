@@ -218,6 +218,9 @@ def run_simulations(conf: Config):
     return (het_result, het_mute_result, hom_result)
 
 def main():
+    # set up common config, use default config for default arg values where appropriate
+    conf = Config()
+
     parser = argparse.ArgumentParser(
         description='simulate and compare different configurations of heterogenous networks'
         )
@@ -225,6 +228,7 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose/debug output')
     parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
     parser.add_argument('-b', '--batch', type=int, default=1, help='run each nr_node sim on b different networks of nr_nodes')
+    parser.add_argument('-s', '--seed', type=int, default=conf.SEED, help='seed for simulation config RNG')
     args = parser.parse_args()
 
     if args.verbose:
@@ -233,8 +237,8 @@ def main():
         lib_logger.setLevel(logging.DEBUG)
         logger.debug("debug logging enabled")
 
-    # set up common config
-    conf = Config()
+    logger.debug(f"using RNG seed {args.seed}")
+    conf.SEED = args.seed
     random.seed(conf.SEED) # deterministic sims
     conf.MODEL = 0 # selection of model with less dramatic range between infra nodes
 

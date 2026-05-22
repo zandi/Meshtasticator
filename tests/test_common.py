@@ -59,6 +59,7 @@ class TestCommonFunctions(unittest.TestCase):
         class MyNode:
             def __init__(self, p):
                 self.position = p
+                self.antenna_gain = 0.0
 
             def __repr__(self):
                 return f"MyNode(p={self.position})"
@@ -84,7 +85,7 @@ class TestCommonFunctions(unittest.TestCase):
         self.assertLessEqual(position[1], upper_bound_y, f"y within bounds {position=}")
 
         # second node case
-        n = MyNode(Point(0, 0, 0))
+        n = MyNode(Point(0, 0, 1))
         nodes = [n]
         position = lib.common.find_random_position(conf, nodes)
         self.assertIsNotNone(position, "always return position")

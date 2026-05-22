@@ -74,6 +74,8 @@ class NodeConfig:
         neighbor_info -- if neighbor info is enabled. Default False
         can_move -- True if node is able to move. Default False
         """
+        if position.z <= 0:
+            raise ValueError(f"Node must have positive height above ground (z coordinate in {position}")
         self.node_id = node_id
         self.position = position.copy() # make sure we keep our own point
         self.period = period

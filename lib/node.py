@@ -17,9 +17,10 @@ from lib.point import Point
 
 logger = logging.getLogger(__name__)
 
-# roles taken from the protobuf config meshtastic/config.proto in https://github.com/meshtastic/protobufs
-# deprecated roles are included for simulation utility
 class MESHTASTIC_ROLE(Enum):
+    '''roles taken from the protobuf config meshtastic/config.proto in https://github.com/meshtastic/protobufs
+    deprecated roles are included for simulation utility. Not all roles are implemented.
+    '''
     CLIENT = 'CLIENT'
     CLIENT_MUTE = 'CLIENT_MUTE'
     ROUTER = 'ROUTER'
@@ -33,6 +34,10 @@ class MESHTASTIC_ROLE(Enum):
     TAK_TRACKER = 'TAK_TRACKER'
     ROUTER_LATE = 'ROUTER_LATE'
     CLIENT_BASE = 'CLIENT_BASE'
+
+class MESHTASTIC_NODE_KIND(Enum):
+    INFRASTRUCTURE = 'INFRASTRUCTURE'
+    PERSONAL = 'PERSONAL'
 
 class MeshNodeStats:
     """Statistics, monitoring, and data tracking only relevant to and entirely
@@ -59,7 +64,7 @@ class MeshNodeStats:
 class NodeConfig:
     """Specific configuration for a node
     """
-    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False, can_move: bool = True):
+    def __init__(self, node_id: int, position: Point, period: int, tx_power: int, freq: float, role: MESHTASTIC_ROLE = MESHTASTIC_ROLE.CLIENT, antenna_gain: float = 0, hop_limit: int = 3, neighbor_info: bool = False, can_move: bool = True, kind: MESHTASTIC_NODE_KIND = MESHTASTIC_NODE_KIND.PERSONAL):
         """Initial configuration of a node
 
         Arguments:
@@ -73,6 +78,7 @@ class NodeConfig:
         hop_limit -- hop limit. Default 3
         neighbor_info -- if neighbor info is enabled. Default False
         can_move -- True if node is able to move. Default False
+        kind -- selection from MESHTASTIC_NODE_KIND enum. Default PERSONAL
         """
         if position.z <= 0:
             raise ValueError(f"Node must have positive height above ground (z coordinate in {position}")
@@ -86,6 +92,7 @@ class NodeConfig:
         self.hop_limit = hop_limit
         self.neighbor_info = neighbor_info
         self.can_move = can_move
+        self.kind = kind
 
     @classmethod
     def from_gen_scenario_output(cls, node_id: int, node_dict: {}, period: int, tx_power: int, freq: float):
@@ -183,6 +190,7 @@ class MeshNode:
         self.hopLimit = self.node_conf.hop_limit
         self.antennaGain = self.node_conf.antenna_gain
         self.period = self.node_conf.period
+        self.kind = self.node_conf.kind
 
         # using this more like a struct than a proper object.
         self.my_stats = MeshNodeStats(self.nodeid)

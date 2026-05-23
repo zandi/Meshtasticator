@@ -2,6 +2,8 @@
 import argparse
 import copy
 import logging
+from multiprocessing.pool import Pool
+from os import process_cpu_count
 import random
 
 logging.basicConfig()
@@ -13,6 +15,11 @@ from lib.discrete_event_sim import DiscreteEventSim
 from lib.gui import Graph
 from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE, MESHTASTIC_NODE_KIND
 from lib.point import Point
+
+# make global so parallelized worker process can pass back only necessary
+# (and hopefully not generator) data
+METRICS_OF_INTEREST = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
+AS_PERCENT = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
 
 '''We want to simulate heterogenous networks to investigate recommendations for
 managing them.
@@ -313,9 +320,6 @@ def analyze_and_display_results(results_collection):
     results_collection -- dictionary of results. Top-level key is the context
     of the simulation run. Below this are the results of that specific run
     '''
-    # compute averages of metrics of interest from batches for each network size.
-    metrics_of_interest = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
-    as_percent = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
 
     def make_percent(v):
         '''turn float in [0,1] into a percent float [0,100] with 2 decimal places
@@ -351,7 +355,7 @@ def analyze_and_display_results(results_collection):
         if inner is None:
             collected_finished_results[nr_nodes] = {}
 
-        for m in metrics_of_interest:
+        for m in METRICS_OF_INTEREST:
             avg = sum([r[m] for r in res]) / len(res)
             analyzed_results[brk] = avg
             inner = collected_finished_results[nr_nodes].get(variety)
@@ -369,8 +373,8 @@ def analyze_and_display_results(results_collection):
     print(f"\t\t{',\t'.join(all_varieties.keys())}")
     for nr_nodes, batch in collected_finished_results.items():
         print(f"\n{nr_nodes} Nodes, batch of {batch_size} networks:")
-        for m in metrics_of_interest:
-            if m in as_percent:
+        for m in METRICS_OF_INTEREST:
+            if m in AS_PERCENT:
                 line = f"{m:>20}:"
                 for v in all_varieties.keys():
                     as_pr = make_percent(batch[v][m])
@@ -392,7 +396,18 @@ def analyze_and_display_results(results_collection):
     # TODO: also print matplotlib graphs & figures for metrics of interest
     pass
 
-def main():
+def run_simulation_parallel(ctx: SimContext):
+    '''target function for parallelization. Create and run simulation, collect
+    results, return results.
+    '''
+    # when running in parallel, skip doing any GUI stuff
+    sim = DiscreteEventSim(ctx.conf, ctx.nodes)
+    sim.run_simulation()
+    r = sim.get_results()
+    res = {m: r[m] for m in METRICS_OF_INTEREST}
+    return (ctx, res)
+
+if __name__ == '__main__':
     # set up common config, use default config for default arg values where appropriate
     conf = Config()
 
@@ -405,6 +420,7 @@ def main():
     parser.add_argument('-b', '--batch', type=int, default=1, help='run each nr_node sim on b different networks of nr_nodes')
     parser.add_argument('-s', '--seed', type=int, default=conf.SEED, help='seed for simulation config RNG')
     parser.add_argument('--configs-only', action='store_true', help='only generate configurations & networks, do not run simulations')
+    parser.add_argument('-j', '--jobs', type=int, default=1, help='how many processes to use for simulations in parellel. Default 1')
     args = parser.parse_args()
 
     if args.verbose:
@@ -412,6 +428,13 @@ def main():
         lib_logger = logging.getLogger('lib')
         lib_logger.setLevel(logging.DEBUG)
         logger.debug("debug logging enabled")
+
+    # Python 3.13+, maybe just skip this
+    num_cpus = process_cpu_count()
+    logger.debug(f"{num_cpus=}")
+    if num_cpus is not None and \
+        args.jobs > num_cpus:
+            logger.warning(f"Requested {args.jobs} processes but only see {num_cpus} processors. This may not speed up as much as you expect.")
 
     logger.debug(f"using RNG seed {args.seed}")
     conf.SEED = args.seed
@@ -449,27 +472,24 @@ def main():
     if not args.configs_only:
         results = {}
 
-        # make DiscreteSim objects
-        sims_with_context = []
-        for ctx in sim_contexts:
-            if conf.GUI_ENABLED:
-                graph = Graph(conf)
-            else:
-                graph = None
-            sim = DiscreteEventSim(ctx.conf, ctx.nodes, graph)
-            sims_with_context.append((ctx, sim))
-
         # run simulations
-        # TODO: parallelize here
-        print(f"Running {len(sims_with_context)} total simulations.")
-        for (ctx, sim) in sims_with_context:
-            print(f"\tRunning simulation: {ctx.name}, {ctx.nr_nodes} nodes, batch {ctx.batch_iter + 1}/{args.batch}...")
-            sim.run_simulation()
-            r = sim.get_results()
-            results[ctx] = r
+        if args.jobs == 1:
+            print(f"Running {len(sim_contexts)} total simulations.")
+            for ctx in sim_contexts:
+                if conf.GUI_ENABLED:
+                    graph = Graph(conf)
+                else:
+                    graph = None
+                sim = DiscreteEventSim(ctx.conf, ctx.nodes, graph)
+                print(f"\tRunning simulation: {ctx.name}, {ctx.nr_nodes} nodes, batch {ctx.batch_iter + 1}/{args.batch}...")
+                sim.run_simulation()
+                results[ctx] = sim.get_results()
+        else:
+            with Pool(processes=args.jobs) as pool:
+                print(f"\tMultiprocessing simulation: {len(sim_contexts)} simulations on {args.jobs} workers")
+                for ctx, res in pool.map(run_simulation_parallel, sim_contexts):
+                    results[ctx] = res
 
         # compare & display results
         analyze_and_display_results(results)
-
-if __name__ == '__main__':
-    main()
+    pass

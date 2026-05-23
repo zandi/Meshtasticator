@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 from lib.common import find_random_position
 from lib.config import Config
-from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE
+from lib.discrete_event_sim import DiscreteEventSim
+from lib.gui import Graph
+from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE, MESHTASTIC_NODE_KIND
 from lib.point import Point
 
 from loraMesh import run_simulation
@@ -37,29 +39,42 @@ infrastructure nodes, but having less reach, leading to degraded network
 performance.
 '''
 
+class SimContext:
+    '''hold context which uniquely determines a simulation
+    '''
+
+    def __init__(self, name: str, nr_nodes: int, batch_iter: int, batch_size: int, conf: Config, nodes: [NodeConfig]):
+        self.name = name
+        self.nr_nodes = nr_nodes
+        self.batch_iter = batch_iter
+        self.batch_size = batch_size # might not actually need this
+        self.conf = conf
+        self.nodes = nodes
+
 def upgrade_node_in_place(n: NodeConfig, infra_config: Config) -> None:
-    '''apply the given infra config to the node
+    '''apply the given infra config to the node, change the node's kind
+    as INFRASTRUCTURE.
     '''
     n.position.z = infra_config.HM
     n.antenna_gain = infra_config.GL
     n.period = infra_config.PERIOD
+    n.kind = MESHTASTIC_NODE_KIND.INFRASTRUCTURE
 
-def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
-    '''given a list of node configs, create two comparable heterogenous
-    networks. One simple has some nodes upgraded to infrastructure nodes.
-    The other also has non-infrastructure nodes set to CLIENT_MUTE. Once
-    infrastructure nodes are chosen, non-infra nodes in all networks have
-    'can_move' set to True to allow movement.
+def make_het_network(nodes: [NodeConfig], infra_config: Config) -> [NodeConfig]:
+    '''Given a baseline homogenous network, select some nodes
+    to upgrade to 'infrastructure' nodes. Apply the relevant parts
+    of infra_config to them, change nothing else.
 
     Arguments:
-    nodes -- list of NodeConfig objects.
-    infra_config -- Config object for infrastructure nodes
+    nodes -- list of NodeConfigs representing a homogenous network. Modified.
+    infra_config -- NodeConfig to apply to selected infra nodes in-place
 
     Returns:
-    (het_nodes, het_nodes_mute) -- duplicate of `nodes` but with some nodes randomly upgraded to infrastructure nodes.
+    list of NodeConfigs representing the new heterogenous network generated
+    from the given homogenous network
     '''
     # randomly pick some nodes to upgrade to infra nodes. They must be
-    # - immoblie
+    # - immobile
     # - mutually reachable
     # - not within our infra node MINDIST
 
@@ -70,7 +85,7 @@ def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
 
     het_nodes = copy.deepcopy(nodes)
 
-    # randomly select nodes to upgrade
+    # randomly select nodes to upgrade in place
     infra_node_indices = []
     indices = [i for i in range(len(het_nodes))]
     random.shuffle(indices)
@@ -112,32 +127,131 @@ def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
     if len(infra_node_indices) < num_infra_nodes:
         raise ValueError(f"Unable to select {num_infra_nodes} suitable nodes from node list to upgade to infrastructure nodes")
 
-    # for the second heterogenous network, make all non-infra nodes CLIENT_MUTE
-    het_nodes_mute = copy.deepcopy(het_nodes)
-    for i in range(len(het_nodes_mute)):
-        if i not in infra_node_indices:
-            het_nodes_mute[i].role = MESHTASTIC_ROLE.CLIENT_MUTE
-
-    # hack: re-enable movement possibility for all non-infrastructure nodes
+    # hack: correct movement ability in baseline network, match this in our
+    # heterogenous network. Do this here since we know which nodes were
+    # upgraded, and which ones they correspond to in the homogenous network.
     for i in range(len(nodes)):
         if i not in infra_node_indices:
             nodes[i].can_move = True # modifies argument by reference
             het_nodes[i].can_move = True
-            het_nodes_mute[i].can_move = True
 
-    return (het_nodes, het_nodes_mute)
+    return het_nodes
+
+def make_het_mute_network(nodes: [NodeConfig]):
+    '''Given a standard heterogenous network, make all
+    non-infra nodes CLIENT_MUTE
+
+    Arguments:
+    nodes -- list of NodeConfigs representing a heterogenous network,
+    from `make_het_network`
+
+    Returns:
+    list of NodeConfigs representing the new heterogenous network with
+    CLIENT_MUTE generated from the given template heterogenous network
+    '''
+    het_nodes_mute = copy.deepcopy(nodes)
+    found_infra_nodes = False
+    for n in het_nodes_mute:
+        if n.kind == MESHTASTIC_NODE_KIND.PERSONAL:
+            n.role = MESHTASTIC_ROLE.CLIENT_MUTE
+        elif n.kind == MESHTASTIC_NODE_KIND.INFRASTRUCTURE:
+            found_infra_nodes = True
+
+    if not found_infra_nodes:
+        raise ValueError("make_het_mute_network() must be given a network with some nodes with kind==MESHTASTIC_NODE_KIND.INFRASTRUCTURE")
+
+    return het_nodes_mute
+
+def make_het_router_network(nodes: [NodeConfig]):
+    '''Given a standard heterogenous network, make all
+    infra nodes ROUTER
+
+    Arguments:
+    nodes -- list of NodeConfigs representing a heterogenous network,
+    from `make_het_network`
+
+    Returns:
+    list of NodeConfigs representing the new heterogenous network with
+    ROUTER generated from the given template heterogenous network
+    '''
+    het_nodes_router = copy.deepcopy(nodes)
+    found_infra_nodes = False
+    for n in het_nodes_router:
+        if n.kind == MESHTASTIC_NODE_KIND.INFRASTRUCTURE:
+            n.role = MESHTASTIC_ROLE.ROUTER
+            found_infra_nodes = True
+
+    if not found_infra_nodes:
+        raise ValueError("make_het_router_network() must be given a network with some nodes with kind==MESHTASTIC_NODE_KIND.INFRASTRUCTURE")
+
+    return het_nodes_router
+
+def make_het_router_and_mute_network(nodes: [NodeConfig]):
+    '''Given a standard heterogenous network, make all
+    infra nodes ROUTER and non-infra nodes CLIENT_MUTE
+
+    Arguments:
+    nodes -- list of NodeConfigs representing a heterogenous network,
+    from `make_het_network`
+
+    Returns:
+    list of NodeConfigs representing the new heterogenous network with ROUTER
+    and CLIENT_MUTE generated from the given template heterogenous network
+    '''
+    het_nodes_router_and_mute = copy.deepcopy(nodes)
+    found_infra_nodes = False
+    for n in het_nodes_router_and_mute:
+        if n.kind == MESHTASTIC_NODE_KIND.PERSONAL:
+            n.role = MESHTASTIC_ROLE.CLIENT_MUTE
+        elif n.kind == MESHTASTIC_NODE_KIND.INFRASTRUCTURE:
+            n.role = MESHTASTIC_ROLE.ROUTER
+            found_infra_nodes = True
+
+    if not found_infra_nodes:
+        raise ValueError("make_het_router_and_mute_network() must be given a network with some nodes with kind==MESHTASTIC_NODE_KIND.INFRASTRUCTURE")
+
+    return het_nodes_router_and_mute
+
+def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
+    '''given a list of node configs, create comparable heterogenous networks.
+    Once infrastructure nodes are chosen, non-infra nodes in all networks have
+    'can_move' set to True to allow movement. The original nodes have this
+    done to them as well for matching behavior.
+
+    Arguments:
+    nodes -- list of NodeConfig objects. Modified by reference.
+    infra_config -- Config object for infrastructure nodes.
+
+    Returns:
+    dict of heterogenous networks where their key is the variety label.
+    '''
+    het_nodes = make_het_network(nodes, infra_config)
+
+    het_nodes_mute = make_het_mute_network(het_nodes)
+
+    het_nodes_router = make_het_router_network(het_nodes)
+
+    het_nodes_router_and_mute = make_het_router_and_mute_network(het_nodes)
+
+    nets = {
+        'heterogenous': het_nodes,
+        'heterogenous + mute': het_nodes_mute,
+        'heterogenous + router': het_nodes_router,
+        'heterogenous + router + mute': het_nodes_router_and_mute,
+    }
+    return nets
 
 def generate_networks(conf: Config):
-    '''generate 3 roughly-comparable Meshtastic networks to simulate.
+    '''generate roughly-comparable Meshtastic networks to simulate.
 
-    One is heterogenous with all nodes set to CLIENT. Another is heterogenous
-    with non-infrastructure nodes set to CLIENT_MUTE. The third is homogenous
-    and the 'baseline' network.
+    One is the baseline homogenous network. The rest are variations on
+    heterogenous networks to simulate various conditoins.
 
     Arguments:
     conf -- Config object describing network
 
     Returns:
+    dictionary of networks where the key is the variant of the network
     '''
 
     # new algorithm: generate baseline homogenous network first.
@@ -164,8 +278,9 @@ def generate_networks(conf: Config):
             n.can_move = False
 
         try:
-            het_network, het_network_mute = make_heterogenous_networks(hom_network, infra_only_conf)
-            return (het_network, het_network_mute, hom_network)
+            networks = make_heterogenous_networks(hom_network, infra_only_conf)
+            networks['homogenous'] = hom_network
+            return networks
         except ValueError as e:
             # generated homogenous network cannot be upgraded. generate a new one.
             logger.debug(f"Unable to convert homogenous network to suitable heterogenous one. Generating a new homogenous network. Limit {ADJUSTMENT_LIMIT} times")
@@ -185,20 +300,13 @@ def run_simulations(conf: Config):
     '''
 
     # set up networks to simulate
-    (het, het_mute, hom) = generate_networks(conf)
+    networks = generate_networks(conf)
 
     # examine networks
-    logger.debug(f"heterogenous network: {conf.NR_NODES} nodes")
-    for n in het:
-        logger.debug(f"\t\t{n}")
-
-    logger.debug(f"heterogenous network w/ CLIENT_MUTE: {conf.NR_NODES} nodes")
-    for n in het_mute:
-        logger.debug(f"\t\t{n}")
-
-    logger.debug(f"baseline homogenous network: {conf.NR_NODES} nodes")
-    for n in hom:
-        logger.debug(f"\t\t{n}")
+    for name, net in networks.items():
+        logger.debug(f"{name}: {conf.NR_NODES} nodes")
+        for n in net:
+            logger.debug(f"\t\t{n}")
 
     # run simulations. Can use same config since global params are indentical,
     # we only tweaked node-specific values for infra nodes.
@@ -241,12 +349,10 @@ def analyze_and_display_results(results_collection):
     - number of nodes
 
     Arguments:
-    results_collection -- nested dictionary of results. Top-level key is
-    the nr_nodes of the batch. Below this are lists of results keyed by
-    the network type: 'het', 'het_mute' or 'hom'.
+    results_collection -- dictionary of results. Top-level key is the context
+    of the simulation run. Below this are the results of that specific run
     '''
     # compute averages of metrics of interest from batches for each network size.
-    analyzed_results = {}
     metrics_of_interest = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
     as_percent = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
 
@@ -255,36 +361,70 @@ def analyze_and_display_results(results_collection):
         '''
         return round(v * 100, 2)
 
+    # combine results from a particular batch run
     batch_size = None
-    for nr_nodes, batch in results_collection.items():
+    batched_results = {}
+    for ctx, r in results_collection.items():
+        name = ctx.name
+        nr_nodes = ctx.nr_nodes
         if batch_size is None:
-            batch_size = len(batch)
-        analyzed_results[nr_nodes] = {}
-        for network_variety, batch_results in batch.items():
-            analyzed_results[nr_nodes][network_variety] = {}
-            for m in metrics_of_interest:
-                avg = sum([r[m] for r in batch_results]) / len(batch_results)
-                analyzed_results[nr_nodes][network_variety][m] = avg
+            batch_size = ctx.batch_size
+        k = (name, nr_nodes)
+        results = batched_results.get(k)
+        if results is None:
+            batched_results[k] = [r]
+        else:
+            batched_results[k].append(r)
+
+    for brk, results in batched_results.items():
+        logger.debug(f"{brk} -> {len(results)} results")
+
+    # compute averages of metrics for each batch
+    analyzed_results = {}
+    collected_finished_results = {} # [nr_nodes][variety]
+    all_varieties = {}
+    for brk, res in batched_results.items():
+        variety, nr_nodes = brk
+        all_varieties[variety] = 1
+        inner = collected_finished_results.get(nr_nodes)
+        if inner is None:
+            collected_finished_results[nr_nodes] = {}
+
+        for m in metrics_of_interest:
+            avg = sum([r[m] for r in res]) / len(res)
+            analyzed_results[brk] = avg
+            inner = collected_finished_results[nr_nodes].get(variety)
+            if inner is None:
+                collected_finished_results[nr_nodes][variety] = {}
+            collected_finished_results[nr_nodes][variety][m] = avg
+
+    print("=== RESULTS ===")
 
     # display metrics of interest with relevant context info in title, and with
     # primary variables as x-axis
     # column of network varieties, rows of metrics, in groups of nr_nodes
-    print("=== RESULTS ===")
-    print("\n\t\t\tHomogenous (baseline)\tHeterogenous\tHeterogenous + CLIENT_MUTE")
-    for nr_nodes, batch in analyzed_results.items():
-        print(f"{nr_nodes} Nodes, batch of {batch_size} networks:")
+    print(f"\nBatch size: {batch_size}")
+    print(f"\t\t{',\t'.join(all_varieties.keys())}")
+    #raise NotImplementedError("still working on this, it's getting pretty messy")
+    for nr_nodes, batch in collected_finished_results.items():
+        print(f"\n{nr_nodes} Nodes, batch of {batch_size} networks:")
         for m in metrics_of_interest:
             if m in as_percent:
-                hom_m_pr = make_percent(batch['hom'][m])
-                het_m_pr = make_percent(batch['het'][m])
-                het_mute_m_pr = make_percent(batch['het_mute'][m])
-                print(f"{m:>20}:\t{hom_m_pr:>20}%\t{het_m_pr:>11}%\t{het_mute_m_pr:>25}%")
+                line = f"{m:>20}:"
+                for v in all_varieties.keys():
+                    as_pr = make_percent(batch[v][m])
+                    line += f"\t\t{as_pr}%,"
+                print(line)
             elif m == 'meanDelay':
-                hom_m = round(batch['hom'][m], 2)
-                het_m = round(batch['het'][m], 2)
-                het_mute_m = round(batch['het_mute'][m], 2)
-                print(f"{m:>20}:\t{hom_m:>20} ms\t{het_m:>11} ms\t{het_mute_m:>25} ms")
+                line = f"{m:>20}:\t"
+                for v in all_varieties.keys():
+                    as_round = round(batch[v][m], 2)
+                    line += f"\t{as_round},"
+                print(line)
             else:
+                line = f"{m:>20}:"
+                for v in all_varieties.keys():
+                    line += f"\t{batch[v][m]} %"
                 print(f"{m:>20}:\t{batch['hom'][m]}\t\t{batch['het'][m]}\t\t{batch['het_mute'][m]}")
         print("\n")
 
@@ -303,6 +443,7 @@ def main():
     parser.add_argument('-g', '--gui', action='store_true', help='enable gui. helpful for debugging & reviewing simulation details')
     parser.add_argument('-b', '--batch', type=int, default=1, help='run each nr_node sim on b different networks of nr_nodes')
     parser.add_argument('-s', '--seed', type=int, default=conf.SEED, help='seed for simulation config RNG')
+    parser.add_argument('--configs-only', action='store_true', help='only generate configurations & networks, do not run simulations')
     args = parser.parse_args()
 
     if args.verbose:
@@ -323,28 +464,48 @@ def main():
         conf.GUI_ENABLED = False
         conf.PLOT = False
 
-    results = {}
+    # generate all networks/configs with all run variables
+    # each simulation needs: (nr_nodes, batch_run, config, network variety/network)
+    # vary: nr_nodes, batch_run, network variety
+    # which means: network & config (seed) depend on batch run
+    sim_contexts = []
     for nr_nodes in args.nr_nodes:
-        conf.NR_NODES = nr_nodes
-
-        batch_het_res = []
-        batch_het_mute_res = []
-        batch_hom_res = []
         for i in range(args.batch):
-            print(f"\n\nbatch run: {i+1}/{args.batch}")
-            conf.SEED = conf.SEED + i # change network & behavior for batch runs
-            (het_res, het_mute_res, hom_res) = run_simulations(conf)
-            batch_het_res.append(het_res)
-            batch_het_mute_res.append(het_mute_res)
-            batch_hom_res.append(hom_res)
+            net_conf = copy.deepcopy(conf)
+            net_conf.NR_NODES = nr_nodes
+            net_conf.SEED = net_conf.SEED + i # change network & behavior for batch runs
+            networks = generate_networks(net_conf)
+            for name, net in networks.items():
+                ctx = SimContext(name, nr_nodes, i, args.batch, net_conf, net)
+                sim_contexts.append(ctx)
 
-        results[nr_nodes] = {}
-        results[nr_nodes]['het'] = batch_het_res
-        results[nr_nodes]['het_mute'] = batch_het_mute_res
-        results[nr_nodes]['hom'] = batch_hom_res
+    for ctx in sim_contexts:
+        logger.debug(f"sim context:{ctx.nr_nodes=} {ctx.batch_iter=} {ctx.conf.SEED=}, {ctx.name}")
 
-    # compare & display results
-    analyze_and_display_results(results)
+    # set up simulations
+    if not args.configs_only:
+        results = {}
+
+        # make DiscreteSim objects
+        sims_with_context = []
+        for ctx in sim_contexts:
+            if conf.GUI_ENABLED:
+                graph = Graph(conf)
+            else:
+                graph = None
+            sim = DiscreteEventSim(ctx.conf, ctx.nodes, graph)
+            sims_with_context.append((ctx, sim))
+
+        # run simulations
+        # TODO: parallelize here
+        for (ctx, sim) in sims_with_context:
+            print(f"Running simulation: {ctx.name}, {ctx.nr_nodes} nodes, batch {ctx.batch_iter + 1}/{args.batch}...")
+            sim.run_simulation()
+            r = sim.get_results()
+            results[ctx] = r
+
+        # compare & display results
+        analyze_and_display_results(results)
 
 if __name__ == '__main__':
     main()

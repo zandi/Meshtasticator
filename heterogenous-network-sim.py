@@ -14,8 +14,6 @@ from lib.gui import Graph
 from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE, MESHTASTIC_NODE_KIND
 from lib.point import Point
 
-from loraMesh import run_simulation
-
 '''We want to simulate heterogenous networks to investigate recommendations for
 managing them.
 
@@ -288,43 +286,6 @@ def generate_networks(conf: Config):
             continue
     raise ValueError(f"Unable to generate a suitable network using {conf.NR_NODES} nodes")
 
-
-def run_simulations(conf: Config):
-    '''generate networks, run simulations on them, and return results
-
-    Arguments:
-    conf -- Config object describing network to generate
-
-    Returns:
-    (het_result, het_mute_result, hom_result) -- simulation results for each variety of network
-    '''
-
-    # set up networks to simulate
-    networks = generate_networks(conf)
-
-    # examine networks
-    for name, net in networks.items():
-        logger.debug(f"{name}: {conf.NR_NODES} nodes")
-        for n in net:
-            logger.debug(f"\t\t{n}")
-
-    # run simulations. Can use same config since global params are indentical,
-    # we only tweaked node-specific values for infra nodes.
-    # Will print to stdout, but oh well.
-    random.seed(conf.SEED)
-    print(f"\nheterogenous network: {conf.NR_NODES} nodes")
-    het_result = run_simulation(conf, het)
-
-    random.seed(conf.SEED)
-    print(f"\nheterogenous network with non-infra nodes CLIENT_MUTE: {conf.NR_NODES} nodes")
-    het_mute_result = run_simulation(conf, het_mute)
-
-    random.seed(conf.SEED)
-    print(f"\nbaseline homogenous network: {conf.NR_NODES} nodes")
-    hom_result = run_simulation(conf, hom)
-
-    return (het_result, het_mute_result, hom_result)
-
 def analyze_and_display_results(results_collection):
     '''Given a collection of results from a number of batches of simulation runs,
     compute statistics of interest from the raw results, and display these
@@ -400,12 +361,12 @@ def analyze_and_display_results(results_collection):
 
     print("=== RESULTS ===")
 
+    # gross but functional text-only results display
     # display metrics of interest with relevant context info in title, and with
     # primary variables as x-axis
     # column of network varieties, rows of metrics, in groups of nr_nodes
     print(f"\nBatch size: {batch_size}")
     print(f"\t\t{',\t'.join(all_varieties.keys())}")
-    #raise NotImplementedError("still working on this, it's getting pretty messy")
     for nr_nodes, batch in collected_finished_results.items():
         print(f"\n{nr_nodes} Nodes, batch of {batch_size} networks:")
         for m in metrics_of_interest:
@@ -481,6 +442,8 @@ def main():
 
     for ctx in sim_contexts:
         logger.debug(f"sim context:{ctx.nr_nodes=} {ctx.batch_iter=} {ctx.conf.SEED=}, {ctx.name}")
+        for n in ctx.nodes:
+            logger.debug(f"\t{n}")
 
     # set up simulations
     if not args.configs_only:
@@ -498,8 +461,9 @@ def main():
 
         # run simulations
         # TODO: parallelize here
+        print(f"Running {len(sims_with_context)} total simulations.")
         for (ctx, sim) in sims_with_context:
-            print(f"Running simulation: {ctx.name}, {ctx.nr_nodes} nodes, batch {ctx.batch_iter + 1}/{args.batch}...")
+            print(f"\tRunning simulation: {ctx.name}, {ctx.nr_nodes} nodes, batch {ctx.batch_iter + 1}/{args.batch}...")
             sim.run_simulation()
             r = sim.get_results()
             results[ctx] = r

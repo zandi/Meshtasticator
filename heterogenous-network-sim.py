@@ -16,10 +16,19 @@ from lib.gui import Graph
 from lib.node import NodeConfig, default_generate_node_list, MESHTASTIC_ROLE, MESHTASTIC_NODE_KIND
 from lib.point import Point
 
+import matplotlib.pyplot as plt
+
 # make global so parallelized worker process can pass back only necessary
 # (and hopefully not generator) data
 METRICS_OF_INTEREST = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
 AS_PERCENT = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
+METRICS_UNITS = {
+    'collisionRate': '%',
+    'nodeReach': '%',
+    'usefulness': '%',
+    'txAirUtilizationRate': '%',
+    'meanDelay': 'ms'
+}
 
 '''We want to simulate heterogenous networks to investigate recommendations for
 managing them.
@@ -330,6 +339,7 @@ def analyze_and_display_results(results_collection):
     # a batch is of different randomly-generated & comparable networks of the same
     # size & variety, so that we can average out influences from oddball networks.
     batch_size = None
+    seed = None
     batched_results = {} # (network variety, network size) -> [results]
     for ctx, r in results_collection.items():
         name = ctx.name
@@ -337,6 +347,11 @@ def analyze_and_display_results(results_collection):
         if batch_size is None:
             # batch size is constant for all simulations, pick the 1st one
             batch_size = ctx.batch_size
+        if seed is None:
+            # seed is identical for the first network in any batch, and thus
+            # is the "root seed" that determines all others. Suitable for
+            # replicating runs and thus results.
+            seed = ctx.conf.SEED
         # batched by network variety & network size
         k = (name, nr_nodes)
         results = batched_results.get(k)
@@ -376,7 +391,7 @@ def analyze_and_display_results(results_collection):
     # display metrics of interest with relevant context info in title, and with
     # primary variables as x-axis
     # column of network varieties, rows of metrics, in groups of nr_nodes
-    print(f"\nBatch size: {batch_size}")
+    print(f"\nBatch size: {batch_size}, Seed: {seed}")
     print(f"\t\t{',\t'.join(all_varieties)}")
     for size in all_network_sizes:
         print(f"\n{size} Nodes, batch of {batch_size} networks:")
@@ -395,18 +410,39 @@ def analyze_and_display_results(results_collection):
                     line += f"\t{val}"
             print(line)
         print("\n")
+    print(f"\t\t{',\t'.join(all_varieties)}")
+    print(f"\nBatch size: {batch_size}, Seed: {seed}")
 
-    # TODO: also print matplotlib graphs & figures for metrics of interest
     # every metric has its own graph with:
     # - title of: metric, batch size, seed, (other necessary context?)
     # - y axis of the metric's units
     # - x axis of network size
     # - a separate line (y data) for each network variety (w/ legend)
-    pass
+    for m in METRICS_OF_INTEREST:
+        # create a figure for each metric
+        fig, ax = plt.subplots()
+        # set display info, x axis, add variant plots
+        ax.set_xlabel('network size in # of nodes')
+        ax.set_ylabel(f"{m} in {METRICS_UNITS[m]}")
+        title=f"{m}, {batch_size=}, {seed=}"
+        ax.set_title(title, wrap=True)
+        for variety in all_varieties:
+            variety_data = [collected_finished_results[(m, s, variety)] for s in all_network_sizes]
+            if m in AS_PERCENT:
+                variety_data = list(map(make_percent, variety_data))
+            ax.plot(all_network_sizes, variety_data, 'o-', label=variety)
+        ax.legend()
+
+    plt.show()
 
 def run_simulation_parallel(ctx: SimContext):
     '''target function for parallelization. Create and run simulation, collect
     results, return results.
+
+    We create the DiscreteEventSim here and select only the results of interest
+    because multiprocessing expects pickle-able types, which means no
+    generators, and SimPy (and semi-uninentionally our simulation types) is
+    littered with generators
     '''
     # when running in parallel, skip doing any GUI stuff
     sim = DiscreteEventSim(ctx.conf, ctx.nodes)

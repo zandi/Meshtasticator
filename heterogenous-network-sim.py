@@ -326,14 +326,18 @@ def analyze_and_display_results(results_collection):
         '''
         return round(v * 100, 2)
 
-    # combine results from a particular batch run
+    # collect results from batches of runs for specific (variety, size) combos.
+    # a batch is of different randomly-generated & comparable networks of the same
+    # size & variety, so that we can average out influences from oddball networks.
     batch_size = None
-    batched_results = {}
+    batched_results = {} # (network variety, network size) -> [results]
     for ctx, r in results_collection.items():
         name = ctx.name
         nr_nodes = ctx.nr_nodes
         if batch_size is None:
+            # batch size is constant for all simulations, pick the 1st one
             batch_size = ctx.batch_size
+        # batched by network variety & network size
         k = (name, nr_nodes)
         results = batched_results.get(k)
         if results is None:
@@ -345,23 +349,26 @@ def analyze_and_display_results(results_collection):
         logger.debug(f"{brk} -> {len(results)} results")
 
     # compute averages of metrics for each batch
-    analyzed_results = {}
-    collected_finished_results = {} # [nr_nodes][variety]
-    all_varieties = {}
+    collected_finished_results = {} # (metric, nr_nodes, variety)
+    all_varieties_dict = {} # learn network varieties
+    all_network_size_dict = {} # learn network sizes
     for brk, res in batched_results.items():
         variety, nr_nodes = brk
-        all_varieties[variety] = 1
-        inner = collected_finished_results.get(nr_nodes)
-        if inner is None:
-            collected_finished_results[nr_nodes] = {}
+
+        # learn network sizes & varieties
+        all_varieties_dict[variety] = 1
+        all_network_size_dict[nr_nodes] = 1
 
         for m in METRICS_OF_INTEREST:
             avg = sum([r[m] for r in res]) / len(res)
-            analyzed_results[brk] = avg
-            inner = collected_finished_results[nr_nodes].get(variety)
-            if inner is None:
-                collected_finished_results[nr_nodes][variety] = {}
-            collected_finished_results[nr_nodes][variety][m] = avg
+
+            # map (metric, nr_nodes, variety) -> average within batch
+            k = (m, nr_nodes, variety)
+            collected_finished_results[k] = avg
+
+    all_varieties = list(all_varieties_dict.keys())
+    all_network_sizes = list(all_network_size_dict.keys())
+    all_network_sizes.sort()
 
     print("=== RESULTS ===")
 
@@ -370,30 +377,31 @@ def analyze_and_display_results(results_collection):
     # primary variables as x-axis
     # column of network varieties, rows of metrics, in groups of nr_nodes
     print(f"\nBatch size: {batch_size}")
-    print(f"\t\t{',\t'.join(all_varieties.keys())}")
-    for nr_nodes, batch in collected_finished_results.items():
-        print(f"\n{nr_nodes} Nodes, batch of {batch_size} networks:")
+    print(f"\t\t{',\t'.join(all_varieties)}")
+    for size in all_network_sizes:
+        print(f"\n{size} Nodes, batch of {batch_size} networks:")
         for m in METRICS_OF_INTEREST:
-            if m in AS_PERCENT:
-                line = f"{m:>20}:"
-                for v in all_varieties.keys():
-                    as_pr = make_percent(batch[v][m])
+            line = f"{m:>20}:"
+            for variety in all_varieties:
+                k = (m, size, variety)
+                val = collected_finished_results[k]
+                if m in AS_PERCENT:
+                    as_pr = make_percent(val)
                     line += f"\t\t{as_pr}%,"
-                print(line)
-            elif m == 'meanDelay':
-                line = f"{m:>20}:\t"
-                for v in all_varieties.keys():
-                    as_round = round(batch[v][m], 2)
-                    line += f"\t{as_round},"
-                print(line)
-            else:
-                line = f"{m:>20}:"
-                for v in all_varieties.keys():
-                    line += f"\t{batch[v][m]} %"
-                print(f"{m:>20}:\t{batch['hom'][m]}\t\t{batch['het'][m]}\t\t{batch['het_mute'][m]}")
+                elif m == 'meanDelay':
+                    as_round = round(val, 2)
+                    line += f"\t{as_round} ms,"
+                else:
+                    line += f"\t{val}"
+            print(line)
         print("\n")
 
     # TODO: also print matplotlib graphs & figures for metrics of interest
+    # every metric has its own graph with:
+    # - title of: metric, batch size, seed, (other necessary context?)
+    # - y axis of the metric's units
+    # - x axis of network size
+    # - a separate line (y data) for each network variety (w/ legend)
     pass
 
 def run_simulation_parallel(ctx: SimContext):
@@ -474,7 +482,7 @@ if __name__ == '__main__':
 
         # run simulations
         if args.jobs == 1:
-            print(f"Running {len(sim_contexts)} total simulations.")
+            print(f"Running {len(sim_contexts)} total simulations...")
             for ctx in sim_contexts:
                 if conf.GUI_ENABLED:
                     graph = Graph(conf)
@@ -486,7 +494,7 @@ if __name__ == '__main__':
                 results[ctx] = sim.get_results()
         else:
             with Pool(processes=args.jobs) as pool:
-                print(f"\tMultiprocessing simulation: {len(sim_contexts)} simulations on {args.jobs} workers")
+                print(f"\tMultiprocessing simulation: {len(sim_contexts)} simulations on {args.jobs} workers...")
                 for ctx, res in pool.map(run_simulation_parallel, sim_contexts):
                     results[ctx] = res
 

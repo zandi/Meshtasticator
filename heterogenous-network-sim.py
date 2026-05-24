@@ -5,6 +5,7 @@ import logging
 from multiprocessing.pool import Pool
 from os import process_cpu_count
 import random
+from time import sleep
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -531,8 +532,27 @@ if __name__ == '__main__':
         else:
             with Pool(processes=args.jobs) as pool:
                 print(f"\tMultiprocessing simulation: {len(sim_contexts)} simulations on {args.jobs} workers...")
-                for ctx, res in pool.map(run_simulation_parallel, sim_contexts):
+
+                def finished_callback(result):
+                    ctx, res = result
                     results[ctx] = res
+
+                def error_callback(exc):
+                    # unsure what to do, tell the user
+                    logger.error(f"callback error: {exc}")
+
+                for s_ctx in sim_contexts:
+                    pool.apply_async(run_simulation_parallel, (s_ctx,), callback=finished_callback)
+
+                print("Progress: ",end='',flush=True)
+                total = len(sim_contexts)
+                while len(results.keys()) < total:
+                    sleep(1)
+                    finished = len(results.keys())
+                    percent_finished = round((finished / total) * 100, 2)
+                    print(f"{percent_finished}% ({finished}/{total}) ... ")
+
+                print('') # print newline for spacing
 
         # compare & display results
         analyze_and_display_results(results)

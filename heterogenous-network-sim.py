@@ -21,13 +21,14 @@ import matplotlib.pyplot as plt
 
 # make global so parallelized worker process can pass back only necessary
 # (and hopefully not generator) data
-METRICS_OF_INTEREST = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay']
+METRICS_OF_INTEREST = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate', 'meanDelay', 'avgNodeLinks']
 AS_PERCENT = ['collisionRate', 'nodeReach', 'usefulness', 'txAirUtilizationRate']
 METRICS_UNITS = {
     'collisionRate': '%',
     'nodeReach': '%',
     'usefulness': '%',
     'txAirUtilizationRate': '%',
+    'avgNodeLinks': 'nodes',
     'meanDelay': 'ms'
 }
 

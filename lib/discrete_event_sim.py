@@ -99,6 +99,9 @@ class SimulationResults:
         if self.results["totalPairs"] != 0:
             noLinkRate = self.results["noLinks"] / self.results["totalPairs"]
             self.results["noLinkRate"] = noLinkRate
+            LinkRate = self.results["totalLinks"] / self.results["totalPairs"]
+            self.results["LinkRate"] = LinkRate
+            self.results["avgNodeLinks"] = LinkRate * conf.NR_NODES
 
         if conf.MOVEMENT_ENABLED:
             self.results["movingNodes"] = sum([1 for n in nodes if n.isMoving is True])
@@ -192,6 +195,7 @@ class DiscreteEventSim:
             "messages": self.data_tracking.messages,
             "delays": self.data_tracking.delays,
             "totalPairs": self.data_tracking.totalPairs,
+            "totalLinks": self.data_tracking.totalLinks,
             "noLinks": self.data_tracking.noLinks,
             "nodes": self.mutated_state.nodes,
         }

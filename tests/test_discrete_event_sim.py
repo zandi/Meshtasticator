@@ -109,6 +109,7 @@ class TestDiscreteEventSim(unittest.TestCase):
         r['messageSeq'] = 10 # total # of messages (not packets)
 
         r['totalPairs'] = 3
+        r['totalLinks'] = 3
         r['noLinks'] = 0
 
         sim_results = lib.discrete_event_sim.SimulationResults(r)

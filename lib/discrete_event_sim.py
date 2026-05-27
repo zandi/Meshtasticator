@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from simpy import Environment as SimpyEnvironment
 import numpy as np
 
+from lib.area import estimate_coverage_area
 from lib.config import Config
 from lib.discrete_event_sim_components import SimulationState, SimulationDataTracking
 from lib.node import MeshNode, NodeConfig
@@ -146,6 +147,15 @@ class DiscreteEventSim:
         # on config settings.
         self.initialize_connectivity_map()
 
+        # calculate initial area/density metrics
+        a, a_err = estimate_coverage_area(self.conf, self.node_configs)
+        # convert from m^2 to km^2 (divide by 1,000,000)
+        a /= 1_000_000
+        a_err /= 1_000_000
+        self.data_tracking.init_coverage_area = a
+        self.data_tracking.init_coverage_area_error = a_err
+        self.data_tracking.init_avg_density = len(self.node_configs) / a
+
         # node configs provided, create nodes with them
         for cfg in self.node_configs:
             n = MeshNode(self.conf,
@@ -197,6 +207,9 @@ class DiscreteEventSim:
             "totalPairs": self.data_tracking.totalPairs,
             "totalLinks": self.data_tracking.totalLinks,
             "noLinks": self.data_tracking.noLinks,
+            "init_coverage_area": self.data_tracking.init_coverage_area,
+            "init_coverage_area_error": self.data_tracking.init_coverage_area_error,
+            "init_avg_density": self.data_tracking.init_avg_density,
             "nodes": self.mutated_state.nodes,
         }
         results = SimulationResults(first_order_results)

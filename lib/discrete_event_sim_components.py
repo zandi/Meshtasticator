@@ -60,3 +60,6 @@ class SimulationDataTracking:
         self.totalPairs = 0
         self.totalLinks = 0
         self.noLinks = 0
+        self.init_coverage_area = 0
+        self.init_coverage_area_error = 0
+        self.init_avg_density = 0

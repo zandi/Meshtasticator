@@ -208,6 +208,11 @@ def run_simulation(conf, node_config):
     usefulness = results['usefulness']
     delayDropped = results['delayDropped']
 
+    coverage_area = results['init_coverage_area']
+    coverage_area_error = results['init_coverage_area_error']
+    coverage_area_error_percent = round(100*(coverage_area_error/coverage_area),2)
+    avg_density = results['init_avg_density']
+
     print("*******************************")
     print(f"\nRouter Type: {conf.SELECTED_ROUTER_TYPE}")
     print('Number of messages created:', messageSeq)
@@ -221,6 +226,8 @@ def run_simulation(conf, node_config):
     print("Average percentage of nodes reached:", round(nodeReach*100, 2))
     print("Percentage of received packets containing new message:", round(usefulness*100, 2))
     print("Number of packets dropped by delay/hop limit:", delayDropped)
+    print(f"Coverage Area: {coverage_area} km^2, -/+ {coverage_area_error} (-/+ {coverage_area_error_percent} %)")
+    print(f"Average Density: {avg_density} nodes/km^2")
 
     if conf.MODEL_ASYMMETRIC_LINKS:
         noLinkRate = results['noLinkRate']

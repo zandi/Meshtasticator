@@ -152,6 +152,21 @@ class NodeConfig:
 
         return (rssi, pl)
 
+    def estimate_max_range(self, conf: Config) -> float:
+        def zero_link_budget(dist: float):
+            '''defined to give rssi-above-sensitivity, so that the zero aligns
+            with a reasonable estimate of a max range (variable is distance)
+            '''
+            # assume we're communicating with a somewhat crummy default node,
+            # height agl is 1m, antenna gain is 0 dBi
+            pl = estimate_path_loss(conf, dist, self.freq, self.position.z, 1.0)
+            rssi = self.tx_power + self.antenna_gain + 0 - pl
+            return rssi - conf.current_preset['sensitivity']
+
+        maxrange = rootFinder(zero_link_budget, 1500)
+        logger.debug(f"node {self.node_id} max range estimate: {maxrange} m")
+        return maxrange
+
     def __str__(self):
         as_string = f"NodeConfig id: {self.node_id} at {self.position}, role {self.role}. power {self.tx_power} dBm, gain {self.antenna_gain} dBi, on {self.freq/1000000} MHz. hop limit {self.hop_limit}"
         return as_string
@@ -274,19 +289,7 @@ class MeshNode:
         for all situations. Just assume the receiving node is the minimum expected
         capability so we don't overestimate range.
         '''
-        def zero_link_budget(dist: float):
-            '''defined to give rssi-above-sensitivity, so that the zero aligns
-            with a reasonable estimate of a max range (variable is distance)
-            '''
-            # assume we're communicating with a somewhat crummy default node,
-            # height agl is 1m, antenna gain is 0 dBi
-            pl = estimate_path_loss(self.conf, dist, self.node_conf.freq, self.position.z, 1.0)
-            rssi = self.node_conf.tx_power + self.node_conf.antenna_gain + 0 - pl
-            return rssi - self.conf.current_preset['sensitivity']
-
-        maxrange = rootFinder(zero_link_budget, 1500)
-        logger.debug(f"node {self.nodeid} max range estimate: {maxrange} m")
-        return maxrange
+        return self.node_conf.estimate_max_range(self.conf)
 
     def track_channel_utilization(self):
         """

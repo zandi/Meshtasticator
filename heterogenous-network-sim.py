@@ -5,7 +5,7 @@ import logging
 from multiprocessing.pool import Pool
 from os import process_cpu_count
 import random
-from time import sleep
+from time import sleep, time, process_time
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -612,6 +612,8 @@ if __name__ == '__main__':
     if not args.configs_only:
         results = {}
 
+        start_time = time()
+
         # run simulations
         if args.jobs == 1:
             print(f"Running {len(sim_contexts)} total simulations...")
@@ -648,6 +650,9 @@ if __name__ == '__main__':
                     print(f"{percent_finished}% ({finished}/{total}) ... ")
 
                 print('') # print newline for spacing
+
+        end_time = time()
+        print(f"Simulated in {end_time - start_time} seconds")
 
         # compare & display results
         analyze_and_display_results(results)

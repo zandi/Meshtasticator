@@ -34,6 +34,7 @@ METRICS_UNITS = {
     'messageSeq': 'messages',
     'meanDelay': 'ms'
 }
+RATIO_OF_INFRA_NODES = 0.2 # percentage of nodes in the network that should be infra nodes
 
 '''We want to simulate heterogenous networks to investigate recommendations for
 managing them.
@@ -79,7 +80,7 @@ def upgrade_node_in_place(n: NodeConfig, infra_config: Config) -> None:
     n.period = infra_config.PERIOD
     n.kind = MESHTASTIC_NODE_KIND.INFRASTRUCTURE
 
-def make_het_network(nodes: [NodeConfig], infra_config: Config) -> [NodeConfig]:
+def make_het_network(nodes: [NodeConfig], infra_config: Config, use_alternate=False) -> [NodeConfig]:
     '''Given a baseline homogenous network, select some nodes
     to upgrade to 'infrastructure' nodes. Apply the relevant parts
     of infra_config to them, change nothing else.
@@ -87,6 +88,7 @@ def make_het_network(nodes: [NodeConfig], infra_config: Config) -> [NodeConfig]:
     Arguments:
     nodes -- list of NodeConfigs representing a homogenous network. Modified.
     infra_config -- NodeConfig to apply to selected infra nodes in-place
+    use_alternate -- Use alternative heterogenous network generation
 
     Returns:
     list of NodeConfigs representing the new heterogenous network generated
@@ -97,62 +99,132 @@ def make_het_network(nodes: [NodeConfig], infra_config: Config) -> [NodeConfig]:
     # - mutually reachable
     # - not within our infra node MINDIST
 
-    RATIO_OF_INFRA_NODES = 0.2 # percentage of nodes in the network that should be infra nodes
     num_infra_nodes = int(len(nodes) * RATIO_OF_INFRA_NODES)
     if num_infra_nodes < 2:
         raise ValueError(f"Must have enough nodes to have 2 infrastructure nodes. {len(nodes)} * {RATIO_OF_INFRA_NODES} < 2")
 
     het_nodes = copy.deepcopy(nodes)
 
-    # randomly select nodes to upgrade in place
-    infra_node_indices = []
-    indices = [i for i in range(len(het_nodes))]
-    random.shuffle(indices)
-    for try_i in indices:
-        if len(infra_node_indices) >= num_infra_nodes:
-            # have enough, we're done!
-            break
+    if use_alternate:
+        # randomly add infrastructure nodes to network
+        # - not on the edges of the network
+        # - not too close to other infra nodes
+        # - connected to at least one other infra node
+        # the homogenous network we're given is connected, and due to
+        # how it is generated tends to have a 'center' blob of nodes.
+        # Since our infra nodes tend to have large range, just define
+        # a rough area of 'the network' and place infra nodes in there
+        # at random.
+        # - calculate center of given network
+        # - find most distant node to set the radius
+        # - place infra nodes randomly within this circle, due to other constraints
 
-        candidate = het_nodes[try_i]
-        if not candidate.can_move:
-            if len(infra_node_indices) < 1:
-                # first choice is easiest
-                upgrade_node_in_place(candidate, infra_config)
-                infra_node_indices.append(try_i)
-            else:
-                # check against other infra nodes already chosen.
-                # make sure we're not too close to any other infra node,
-                # and can reach at least one
-                is_connected = False
-                too_close = False
-                for other_i in infra_node_indices:
-                    other_n = het_nodes[other_i]
-                    dist = candidate.position.euclidean_distance(other_n.position)
-                    if dist < infra_config.MINDIST:
-                        # immediately disqualified
-                        too_close = True
-                        break
+        infra_nodes = []
 
-                    rssi = candidate.compute_rssi_and_pathloss_to(other_n, infra_config)[0]
-                    if not is_connected and rssi > infra_config.current_preset['sensitivity']:
-                        # just need to be connected to one
-                        is_connected = True
-                if is_connected and not too_close:
-                    # candidate wins!
+        # re-set ability to move. We aren't upgrading in place, so we can't
+        # incorrectly inherit it for infra nodes.
+        for n in nodes:
+            n.can_move = True
+        for n in het_nodes:
+            n.can_move = True
+
+        x_center = sum([n.position.x for n in het_nodes]) / len(het_nodes)
+        y_center = sum([n.position.y for n in het_nodes]) / len(het_nodes)
+        center = Point(x_center, y_center, 0)
+        radius = max([center.euclidean_distance(n.position) for n in het_nodes])
+
+        while len(infra_nodes) < num_infra_nodes:
+            # find a suitable place for a new infra node
+            cand_x = random.randint(int(center.x - radius), int(center.x + radius))
+            cand_y = random.randint(int(center.y - radius), int(center.y + radius))
+            candidate_pos = Point(cand_x, cand_y, infra_config.HM)
+
+            # probability (1 - pi/4)^n we have to do this loop n times
+            while candidate_pos.euclidean_distance(center) > radius:
+                cand_x = random.randint(int(center.x - radius), int(center.x + radius))
+                cand_y = random.randint(int(center.y - radius), int(center.y + radius))
+                candidate_pos = Point(cand_x, cand_y, infra_config.HM)
+
+            # have a location 'in' the network, check other criteria
+            node_id = len(het_nodes) + len(infra_nodes)
+            candidate = NodeConfig(node_id, candidate_pos, infra_config.PERIOD, infra_config.PTX, infra_config.FREQ, MESHTASTIC_ROLE.CLIENT, infra_config.GL, can_move=False, kind=MESHTASTIC_NODE_KIND.INFRASTRUCTURE)
+
+            is_connected = False
+            too_close = False
+
+            # first one is free
+            if len(infra_nodes) == 0:
+                is_connected = True
+
+            for infra_n in infra_nodes:
+                dist = candidate.position.euclidean_distance(infra_n.position)
+                if dist < infra_config.MINDIST:
+                    # immediately disqualified, try again
+                    too_close = True
+                    break
+
+                rssi = candidate.compute_rssi_and_pathloss_to(infra_n, infra_config)[0]
+                if not is_connected and rssi > infra_config.current_preset['sensitivity']:
+                    # just need to be connected to one
+                    is_connected = True
+
+            if is_connected and not too_close:
+                # successfully placed a new infra node!
+                logger.debug(f"placed infra node {candidate.node_id}")
+                infra_nodes.append(candidate)
+        # combine given homogenous nodes
+        het_nodes.extend(infra_nodes)
+    else:
+        # randomly select nodes to upgrade in place
+
+        infra_node_indices = []
+        indices = [i for i in range(len(het_nodes))]
+        random.shuffle(indices)
+        for try_i in indices:
+            if len(infra_node_indices) >= num_infra_nodes:
+                # have enough, we're done!
+                break
+
+            candidate = het_nodes[try_i]
+            if not candidate.can_move:
+                if len(infra_node_indices) < 1:
+                    # first choice is easiest
                     upgrade_node_in_place(candidate, infra_config)
                     infra_node_indices.append(try_i)
+                else:
+                    # check against other infra nodes already chosen.
+                    # make sure we're not too close to any other infra node,
+                    # and can reach at least one
+                    is_connected = False
+                    too_close = False
+                    for other_i in infra_node_indices:
+                        other_n = het_nodes[other_i]
+                        dist = candidate.position.euclidean_distance(other_n.position)
+                        if dist < infra_config.MINDIST:
+                            # immediately disqualified
+                            too_close = True
+                            break
 
-    # (should have) found and upgraded infrastructure nodes
-    if len(infra_node_indices) < num_infra_nodes:
-        raise ValueError(f"Unable to select {num_infra_nodes} suitable nodes from node list to upgade to infrastructure nodes")
+                        rssi = candidate.compute_rssi_and_pathloss_to(other_n, infra_config)[0]
+                        if not is_connected and rssi > infra_config.current_preset['sensitivity']:
+                            # just need to be connected to one
+                            is_connected = True
+                    if is_connected and not too_close:
+                        # candidate wins!
+                        upgrade_node_in_place(candidate, infra_config)
+                        infra_node_indices.append(try_i)
 
-    # hack: correct movement ability in baseline network, match this in our
-    # heterogenous network. Do this here since we know which nodes were
-    # upgraded, and which ones they correspond to in the homogenous network.
-    for i in range(len(nodes)):
-        if i not in infra_node_indices:
-            nodes[i].can_move = True # modifies argument by reference
-            het_nodes[i].can_move = True
+        # (should have) found and upgraded infrastructure nodes
+        if len(infra_node_indices) < num_infra_nodes:
+            raise ValueError(f"Unable to select {num_infra_nodes} suitable nodes from node list to upgade to infrastructure nodes")
+
+        # hack: correct movement ability in baseline network, match this in our
+        # heterogenous network. Do this here since we know which nodes were
+        # upgraded, and which ones they correspond to in the homogenous network.
+        for i in range(len(nodes)):
+            if i not in infra_node_indices:
+                nodes[i].can_move = True # modifies argument by reference
+                het_nodes[i].can_move = True
 
     return het_nodes
 
@@ -231,7 +303,7 @@ def make_het_router_and_mute_network(nodes: [NodeConfig]):
 
     return het_nodes_router_and_mute
 
-def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
+def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config, use_alternate=False):
     '''given a list of node configs, create comparable heterogenous networks.
     Once infrastructure nodes are chosen, non-infra nodes in all networks have
     'can_move' set to True to allow movement. The original nodes have this
@@ -240,11 +312,12 @@ def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
     Arguments:
     nodes -- list of NodeConfig objects. Modified by reference.
     infra_config -- Config object for infrastructure nodes.
+    use_alternate -- Use alternative heterogenous network generation
 
     Returns:
     dict of heterogenous networks where their key is the variety label.
     '''
-    het_nodes = make_het_network(nodes, infra_config)
+    het_nodes = make_het_network(nodes, infra_config, use_alternate)
 
     het_nodes_mute = make_het_mute_network(het_nodes)
 
@@ -260,7 +333,7 @@ def make_heterogenous_networks(nodes: [NodeConfig], infra_config: Config):
     }
     return nets
 
-def generate_networks(conf: Config):
+def generate_networks(conf: Config, use_alternate=False):
     '''generate roughly-comparable Meshtastic networks to simulate.
 
     One is the baseline homogenous network. The rest are variations on
@@ -268,6 +341,7 @@ def generate_networks(conf: Config):
 
     Arguments:
     conf -- Config object describing network
+    use_alternate -- Use alternative heterogenous network generation
 
     Returns:
     dictionary of networks where the key is the variant of the network
@@ -297,7 +371,7 @@ def generate_networks(conf: Config):
             n.can_move = False
 
         try:
-            networks = make_heterogenous_networks(hom_network, infra_only_conf)
+            networks = make_heterogenous_networks(hom_network, infra_only_conf, use_alternate)
             networks['homogenous'] = hom_network
             return networks
         except ValueError as e:
@@ -482,6 +556,7 @@ if __name__ == '__main__':
     parser.add_argument('--configs-only', action='store_true', help='only generate configurations & networks, do not run simulations')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='how many processes to use for simulations in parellel. Default 1')
     parser.add_argument('-m','--model', type=int, choices=[0, 1, 2, 3, 4, 5, 6], default=conf.MODEL, help='selection of model for RF propagation.')
+    parser.add_argument('--alt-network-gen', action='store_true', help='use alternative heterogenous network generation')
     args = parser.parse_args()
 
     if args.verbose:
@@ -519,7 +594,11 @@ if __name__ == '__main__':
             net_conf = copy.deepcopy(conf)
             net_conf.NR_NODES = nr_nodes
             net_conf.SEED = conf.SEED + i # change network & behavior for batch runs
-            networks = generate_networks(net_conf)
+            networks = generate_networks(net_conf, args.alt_network_gen)
+            if args.alt_network_gen:
+                # would like to put this elsewhere, but need to adjust based on infra nodes added
+                new_nodes = int(net_conf.NR_NODES * RATIO_OF_INFRA_NODES)
+                net_conf.NR_NODES += new_nodes
             for name, net in networks.items():
                 ctx = SimContext(name, nr_nodes, i, args.batch, net_conf, net)
                 sim_contexts.append(ctx)

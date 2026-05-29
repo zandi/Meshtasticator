@@ -343,19 +343,28 @@ def analyze_and_display_results(results_collection):
     # a batch is of different randomly-generated & comparable networks of the same
     # size & variety, so that we can average out influences from oddball networks.
     batch_size = None
-    seed = None
+    min_seed = None # lowest seed is first run of batch and matches seed provided as CLI argument
+    model = None
     batched_results = {} # (network variety, network size) -> [results]
     for ctx, r in results_collection.items():
         name = ctx.name
         nr_nodes = ctx.nr_nodes
+
         if batch_size is None:
             # batch size is constant for all simulations, pick the 1st one
             batch_size = ctx.batch_size
-        if seed is None:
-            # seed is identical for the first network in any batch, and thus
-            # is the "root seed" that determines all others. Suitable for
-            # replicating runs and thus results.
-            seed = ctx.conf.SEED
+
+        if model is None:
+            # model is constant across all sims, pick the 1st one
+            model = ctx.conf.MODEL
+
+        # first network in a batch has seed matching CLI arg seed. Pick
+        # this to enable replicating runs.
+        if min_seed is None:
+            min_seed = ctx.conf.SEED
+        elif ctx.conf.SEED < min_seed:
+            min_seed = ctx.conf.SEED
+
         # batched by network variety & network size
         k = (name, nr_nodes)
         results = batched_results.get(k)
@@ -363,6 +372,8 @@ def analyze_and_display_results(results_collection):
             batched_results[k] = [r]
         else:
             batched_results[k].append(r)
+
+    seed = min_seed # found root seed
 
     for brk, results in batched_results.items():
         logger.debug(f"{brk} -> {len(results)} results")
@@ -428,7 +439,7 @@ def analyze_and_display_results(results_collection):
         # set display info, x axis, add variant plots
         ax.set_xlabel('network size in # of nodes')
         ax.set_ylabel(f"{m} in {METRICS_UNITS[m]}")
-        title=f"{m}, {batch_size=}, {seed=}"
+        title=f"{m}, {batch_size=}, {seed=}, {model=}"
         ax.set_title(title, wrap=True)
         for variety in all_varieties:
             variety_data = [collected_finished_results[(m, s, variety)] for s in all_network_sizes]
@@ -469,6 +480,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--seed', type=int, default=conf.SEED, help='seed for simulation config RNG')
     parser.add_argument('--configs-only', action='store_true', help='only generate configurations & networks, do not run simulations')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='how many processes to use for simulations in parellel. Default 1')
+    parser.add_argument('-m','--model', type=int, choices=[0, 1, 2, 3, 4, 5, 6], default=conf.MODEL, help='selection of model for RF propagation.')
     args = parser.parse_args()
 
     if args.verbose:
@@ -484,10 +496,10 @@ if __name__ == '__main__':
         args.jobs > num_cpus:
             logger.warning(f"Requested {args.jobs} processes but only see {num_cpus} processors. This may not speed up as much as you expect.")
 
-    logger.debug(f"using RNG seed {args.seed}")
+    logger.debug(f"Using CLI {args=}")
     conf.SEED = args.seed
     random.seed(conf.SEED) # deterministic sims
-    conf.MODEL = 0 # selection of model with less dramatic range between infra nodes
+    conf.MODEL = args.model
 
     if args.gui:
         conf.GUI_ENABLED = True
@@ -505,7 +517,7 @@ if __name__ == '__main__':
         for i in range(args.batch):
             net_conf = copy.deepcopy(conf)
             net_conf.NR_NODES = nr_nodes
-            net_conf.SEED = net_conf.SEED + i # change network & behavior for batch runs
+            net_conf.SEED = conf.SEED + i # change network & behavior for batch runs
             networks = generate_networks(net_conf)
             for name, net in networks.items():
                 ctx = SimContext(name, nr_nodes, i, args.batch, net_conf, net)
@@ -545,7 +557,7 @@ if __name__ == '__main__':
                     logger.error(f"callback error: {exc}")
 
                 for s_ctx in sim_contexts:
-                    pool.apply_async(run_simulation_parallel, (s_ctx,), callback=finished_callback)
+                    pool.apply_async(run_simulation_parallel, (s_ctx,), callback=finished_callback, error_callback=error_callback)
 
                 print("Progress: ",end='',flush=True)
                 total = len(sim_contexts)
